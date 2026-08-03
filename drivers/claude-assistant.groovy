@@ -150,16 +150,18 @@ void askClaude(String prompt) {
         fail("No API key set. Open this device's preferences and add one.")
         return
     }
-    if (!withinCallBudget()) {
-        return
-    }
     // Refusing a concurrent ask is better than accepting it and dropping one
     // of the two answers: a rule waiting on lastReply would otherwise wait
     // forever for a reply that was silently discarded, having already paid
-    // for it.
+    // for it. This runs before the budget is charged — a question that never
+    // goes out must not spend a call, or one hung request would let a 5-second
+    // rule burn the whole daily cap without reaching Anthropic once.
     Long inFlightUntil = (atomicState.inFlightUntil ?: 0L) as Long
     if (now() < inFlightUntil) {
         fail("Refused: a question is already in flight. Wait for the reply, or for the ${HTTP_TIMEOUT_SECONDS}s timeout.")
+        return
+    }
+    if (!checkCallBudget()) {
         return
     }
 
@@ -199,6 +201,7 @@ void askClaude(String prompt) {
     atomicState.inFlightUntil = now() + (HTTP_TIMEOUT_SECONDS * 1000L)
 
     if (logEnable) log.debug "asking Claude (${trimmed.length()} chars, model ${settings.model})"
+    chargeCall()
     // SECURITY: `params` holds the API key in its headers. It is passed
     // straight to the hub's HTTP client and never logged — the debug line
     // above deliberately reports only the prompt length and the model.
@@ -223,10 +226,12 @@ void clearReply() {
 void claudeCallback(resp, Map data) {
     String requestId = data?.requestId as String
 
-    // NOTE: with a 5-second minimum gap and a 120-second timeout, up to
-    // twenty-four requests can be in flight, and callbacks can land in any
-    // order. A late answer to a superseded question would otherwise overwrite
-    // a newer one, pairing lastReply with the wrong lastAsked.
+    // NOTE: the in-flight guard in askClaude keeps at most one request
+    // outstanding, so this check is the backstop for the one case it cannot
+    // cover: a callback that arrives after its marker expired at the
+    // HTTP_TIMEOUT_SECONDS boundary and a newer question was accepted. Without
+    // it that stale answer would overwrite the newer one, pairing lastReply
+    // with the wrong lastAsked.
     // A missing id is treated as stale rather than trusted: the only caller
     // supplies one, so its absence means this callback is not what it claims.
     if (requestId == null || requestId != atomicState.currentRequestId) {
@@ -310,12 +315,24 @@ private String firstTextBlock(Map payload) {
 
 // --- Budget ------------------------------------------------------------------
 
+/** Zero the daily counter when the hub's date has rolled over. */
+private void rollDailyCounterIfNeeded() {
+    String today = todayKey()
+    if (atomicState.callDate != today) {
+        atomicState.callDate = today
+        atomicState.callCount = 0
+    }
+}
+
 /**
- * Check the call against the rate and daily-count ceilings.
+ * Test the call against the rate and daily-count ceilings without charging.
+ *
+ * Charging is a separate step (chargeCall) taken immediately before dispatch,
+ * so a call refused after this point spends nothing.
  *
  * @return true when the call may proceed; false after reporting the refusal.
  */
-private boolean withinCallBudget() {
+private boolean checkCallBudget() {
     Long now = now()
     Integer minGap = (settings.minSecondsBetweenCalls ?: 5) as Integer
     Long since = now - ((atomicState.lastCallMillis ?: 0L) as Long)
@@ -324,12 +341,7 @@ private boolean withinCallBudget() {
         return false
     }
 
-    // Reset the daily counter when the hub's date rolls over.
-    String today = todayKey()
-    if (atomicState.callDate != today) {
-        atomicState.callDate = today
-        atomicState.callCount = 0
-    }
+    rollDailyCounterIfNeeded()
     Integer dailyMax = (settings.maxCallsPerDay ?: 100) as Integer
     Integer used = (atomicState.callCount ?: 0) as Integer
     if (used >= dailyMax) {
@@ -337,20 +349,30 @@ private boolean withinCallBudget() {
         return false
     }
 
-    // SECURITY: both counters are charged here, before the request goes out,
-    // because dispatch is what costs money. Charging the daily count on a
-    // successful reply instead would miss the two responses Anthropic bills
-    // in full but that carry no answer — a safety refusal, and a reply whose
-    // thinking exhausted max_tokens. Those are exactly what a misfiring rule
-    // produces, so the cap would not bind in the case it exists for.
+    return true
+}
+
+/**
+ * Charge one dispatched call against both ceilings.
+ *
+ * Called immediately before the HTTP request goes out.
+ */
+private void chargeCall() {
+    // SECURITY: both counters are charged at dispatch, because dispatch is
+    // what costs money. Charging on a successful reply instead would miss the
+    // two responses Anthropic bills in full but that carry no answer — a
+    // safety refusal, and a reply whose thinking exhausted max_tokens. Those
+    // are exactly what a misfiring rule produces, so the cap would not bind in
+    // the case it exists for. Nothing refunds a charge, for the same reason.
     //
     // atomicState rather than state: Hubitat persists `state` at the end of an
     // execution, so two rules firing at once would both read a stale count and
     // both pass. atomicState commits immediately.
-    atomicState.lastCallMillis = now
+    rollDailyCounterIfNeeded()
+    Integer used = (atomicState.callCount ?: 0) as Integer
+    atomicState.lastCallMillis = now()
     atomicState.callCount = used + 1
     sendEvent(name: "callsToday", value: used + 1)
-    return true
 }
 
 /** @return The current hub-local date as a yyyy-MM-dd key. */

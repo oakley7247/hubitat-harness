@@ -32,6 +32,16 @@ _MAX_TIMEOUT_SECONDS = 60.0
 # against a loopback server on an ephemeral port.
 _DEFAULT_PORT = 80
 
+# SECURITY: NAT64 translation prefixes. An address in this range is not a
+# destination — it is an instruction to a gateway to forward the traffic to the
+# IPv4 address encoded inside it, which may be anywhere. CPython reports the
+# local-use range 64:ff9b:1::/48 as private, so the allowlist below would
+# otherwise admit it and the token would leave the network. RFC 6052 places the
+# embedded address at six different offsets depending on prefix length, so the
+# whole /32 is refused rather than decoded — a Hubitat hub is never reached
+# through NAT64, so refusing it costs nothing real.
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/32")
+
 
 class ConfigError(Exception):
     """Raised when the environment does not describe a usable hub connection."""
@@ -152,7 +162,15 @@ def _resolve_private_ip(host: str) -> str:
 
     for address in sorted(addresses):
         # A scope suffix (fe80::1%en0) is not part of the address itself.
-        parsed = _unwrap(ipaddress.ip_address(address.split("%", 1)[0]))
+        literal = ipaddress.ip_address(address.split("%", 1)[0])
+        if literal in _NAT64_PREFIX:
+            raise ConfigError(
+                f"HUBITAT_HOST {host!r} resolves to {address}, a NAT64 address. "
+                "That is a request to forward traffic to an IPv4 host outside "
+                "this network, so it is refused — the Maker API sends its token "
+                "in cleartext."
+            )
+        parsed = _unwrap(literal)
         if not (parsed.is_private or parsed.is_loopback):
             raise ConfigError(
                 f"HUBITAT_HOST {host!r} resolves to {address}, which is not on a "

@@ -175,9 +175,10 @@ class ReadDeadlineTests(unittest.TestCase):
         """A peer sending one byte at a time is abandoned near the timeout.
 
         The socket timeout resets on every byte, so it never fires on its own.
-        Without the wall-clock deadline this call would run for hours; the
-        assertion is on elapsed time, because "an error was raised" would pass
-        against code that raised it far too late.
+        The assertion is on elapsed time, because "an error was raised" would
+        pass against code that raised it far too late — the handler dribbles
+        for 30 seconds, so a run that merely waits it out still ends in an
+        error. The margin over the 2-second budget is deliberately small.
         """
 
         class _TricklingHandler(BaseHTTPRequestHandler):
@@ -220,15 +221,26 @@ class ReadDeadlineTests(unittest.TestCase):
         )
 
         started = time.monotonic()
-        with self.assertRaises(MakerApiUnavailableError):
+        with self.assertRaises(MakerApiUnavailableError) as caught:
             MakerApiClient(config).list_devices()
         elapsed = time.monotonic() - started
 
         self.assertLess(
             elapsed,
-            15.0,
+            5.0,
             f"the read ran {elapsed:.1f}s against a 2s timeout, so the deadline "
             "did not bound a single blocking read",
+        )
+        # Two mechanisms can end this read, and asserting on the message keeps
+        # a wrong-reason failure (a decode error, a closed socket) from passing
+        # as a bound. In practice the tightened socket timeout wins, because it
+        # is set to the exact budget remaining before each read; the loop's
+        # wall-clock check is the backstop for a response whose socket cannot
+        # be reached to tighten.
+        message = str(caught.exception)
+        self.assertTrue(
+            "stalled partway" in message or "still sending" in message,
+            f"the read ended for an unrelated reason: {message}",
         )
 
 
