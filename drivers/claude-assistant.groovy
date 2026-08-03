@@ -161,7 +161,18 @@ void askClaude(String prompt) {
         fail("Refused: a question is already in flight. Wait for the reply, or for the ${HTTP_TIMEOUT_SECONDS}s timeout.")
         return
     }
+    // SECURITY: the barrier is claimed here, on entry, rather than just before
+    // dispatch. Everything between this line and the request — the budget
+    // check, two sendEvent calls, building the request map — is time during
+    // which a second invocation would otherwise read a stale marker, pass, and
+    // dispatch alongside this one. Claiming late narrows the guard to almost
+    // nothing; claiming on entry is what makes it a barrier. It is released
+    // below if this call turns out not to dispatch.
+    atomicState.inFlightUntil = now() + (HTTP_TIMEOUT_SECONDS * 1000L)
     if (!checkCallBudget()) {
+        // Nothing was dispatched, so the barrier must come down — otherwise a
+        // rate-limited ask would lock the device out for the whole timeout.
+        atomicState.inFlightUntil = 0L
         return
     }
 
@@ -193,12 +204,11 @@ void askClaude(String prompt) {
     ]
 
     // Correlates this request with its callback so a late answer cannot
-    // overwrite a newer one. The in-flight marker expires on its own after the
-    // HTTP timeout, so a callback the hub never delivers cannot wedge the
-    // device permanently.
+    // overwrite a newer one. The in-flight marker claimed above expires on its
+    // own after the HTTP timeout, so a callback the hub never delivers cannot
+    // wedge the device permanently.
     String requestId = "${now()}-${Math.abs(trimmed.hashCode())}".toString()
     atomicState.currentRequestId = requestId
-    atomicState.inFlightUntil = now() + (HTTP_TIMEOUT_SECONDS * 1000L)
 
     if (logEnable) log.debug "asking Claude (${trimmed.length()} chars, model ${settings.model})"
     chargeCall()
