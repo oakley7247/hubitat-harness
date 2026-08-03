@@ -56,6 +56,8 @@ The only ambient controls are the operating system's process and file permission
 
 **The hub speaks plain HTTP.** Traffic between this server and the hub, including the access token, is readable by anything with packet capture on the local network. Hubitat provides no supported way to require HTTPS locally.
 
+**The hub echoes a rejected token back in its 401 body** — observed against a real hub on 2026-08-03: `<oauth><error_description>THE-SUBMITTED-TOKEN</error_description><error>invalid_token</error></oauth>`. An error response from this hub is therefore itself a credential. `maker_api.py` raises a fixed message on 401 and never places a response body in an exception or a log, which is what keeps that out of this process's output; anything added later that logs raw hub responses would leak the token on every failed call.
+
 ## Deployment identity and secrets
 
 **The MCP server runs as Sean's own macOS user account**, with that account's full privileges — it is not sandboxed or dropped to a lower privilege. Secrets come from environment variables, documented in `.env.example`; `.env` is gitignored.

@@ -70,6 +70,20 @@ Leave it unset and every device that passes the checks above is commandable. If 
 
 Setting it also turns off hub mode changes entirely. A mode is not a device and has no id, so it can never appear in the list; refusing it keeps the setting's promise honest rather than leaving one write path outside the fence.
 
+## Troubleshooting
+
+**`The hub rejected the Maker API token or app id`** — the hub returns HTTP 401 with `invalid_token` for a token it no longer recognizes, and it treats an expired token exactly like a junk one. Maker API tokens are invalidated when the app mints a new one, so re-opening and saving the Maker API app can retire the token you are using. Copy the current token from the app's settings page into `.env`.
+
+To tell a bad token from a bad app id, ask the hub for an app id that cannot exist:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' "http://<hub-ip>/apps/api/999999/devices?access_token=x"
+```
+
+A `404` there and a `401` on your real app id means the app exists and the token is the problem. A `404` on your real app id means the app id is wrong.
+
+**Do not paste a raw 401 body anywhere.** The hub echoes the submitted token back inside the error document (`<error_description>your-token</error_description>`), so an error response is itself a credential. This server never logs response bodies for that reason.
+
 ## The Claude Assistant driver
 
 `drivers/claude-assistant.groovy` is a virtual device for the hub. It gives Rule Machine an `askClaude` command: pass it a question, and it publishes Claude's answer to the `lastReply` attribute, which a rule can trigger on.
