@@ -12,7 +12,7 @@ Focused re-audit of the `ea364b7..514759b` delta.
 
 | ID | Severity | Finding | Outcome |
 |---|---|---|---|
-| A4-LOW-1 | Low | Both concurrency barriers wrote after the preamble, so two simultaneous asks could read a stale marker and both dispatch | **Fixed** in `bc5bef0`. The in-flight marker is now claimed on entry and released if the call turns out not to dispatch. |
+| A4-LOW-1 | Low | Both concurrency barriers wrote after the preamble, so two simultaneous asks could read a stale marker and both dispatch | **Fixed** in the commit that introduced this file. The in-flight marker is claimed on entry and released if the call turns out not to dispatch. |
 
 Confirmed intact: the writable-device allowlist on both write paths, the fail-closed capability check, the NAT64 refusal, and the budget split.
 
