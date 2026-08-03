@@ -334,11 +334,20 @@ def send_command(device_id: str, command: str, argument: str | None = None) -> d
     # from the hub on this call — not a list this code carries, and not the
     # model's belief about what the device does. An unknown command is refused
     # before it reaches the URL.
-    accepted = {
-        str(entry.get("command"))
-        for entry in device.get("commands", [])
-        if isinstance(entry, dict) and entry.get("command")
-    }
+    #
+    # NOTE: Hubitat reports this field in two shapes, and a real hub was found
+    # using the one the documentation does not show. `/devices/{id}` returns
+    # bare strings (`["on", "off"]`), while `/devices/{id}/commands` returns
+    # objects (`[{"command": "on", "type": [...]}]`). Reading only the object
+    # form yields an empty allowlist from a populated list, which refuses every
+    # command — safe, but the write path never works.
+    accepted: set[str] = set()
+    for entry in device.get("commands") or []:
+        if isinstance(entry, str):
+            accepted.add(entry)
+        elif isinstance(entry, dict) and entry.get("command"):
+            accepted.add(str(entry["command"]))
+
     if command not in accepted:
         # The list is capped because it is echoed back to the model, and the
         # hub controls its length.

@@ -23,6 +23,23 @@ _SWITCH = {
     "attributes": [{"name": "switch", "currentValue": "off", "dataType": "ENUM"}],
 }
 
+# The shape a real Hubitat hub was observed returning: commands as bare
+# strings, and capabilities interleaving strings with attribute descriptors.
+_REAL_HUB_BULB = {
+    "id": "331",
+    "label": "Bathroom - Countertop Light",
+    "capabilities": [
+        "Actuator",
+        "Refresh",
+        "SwitchLevel",
+        {"attributes": [{"name": "level", "dataType": None}]},
+        "Switch",
+        {"attributes": [{"name": "switch", "dataType": None}]},
+    ],
+    "commands": ["flash", "off", "on", "refresh", "setLevel"],
+    "attributes": [{"name": "switch", "currentValue": "off", "dataType": "ENUM"}],
+}
+
 _LOCK = {
     "id": "200",
     "label": "Front Door",
@@ -110,6 +127,63 @@ class CommandAllowlistTests(unittest.TestCase):
         result = server.send_command("154", "on")
         self.assertEqual(result["trust"], "untrusted_data")
         self.assertIn("not instructions", result["warning"])
+
+
+class HubCommandShapeTests(unittest.TestCase):
+    """Hubitat reports the command list in two shapes; both must be read.
+
+    A real hub returned bare strings, which the documented object form's
+    parser skipped — producing an empty allowlist from a populated list and
+    refusing every command.
+    """
+
+    def test_a_command_list_of_bare_strings_is_honoured(self):
+        """A command the hub listed as a plain string is accepted."""
+        hub = _FakeHub(_REAL_HUB_BULB)
+        _install(self, hub, _settings(False))
+
+        server.send_command("331", "on")
+        self.assertEqual(hub.sent, [("331", "on", None)])
+
+    def test_a_command_absent_from_a_string_list_is_still_refused(self):
+        """The allowlist still refuses — reading both shapes did not weaken it."""
+        hub = _FakeHub(_REAL_HUB_BULB)
+        _install(self, hub, _settings(False))
+
+        with self.assertRaises(MakerApiError) as caught:
+            server.send_command("331", "unlock")
+        self.assertEqual(hub.sent, [])
+        self.assertIn("does not accept", str(caught.exception))
+
+    def test_the_object_shape_still_works(self):
+        """The documented shape is unaffected, so neither hub is broken."""
+        hub = _FakeHub(_SWITCH)
+        _install(self, hub, _settings(False))
+
+        server.send_command("154", "setLevel", "50")
+        self.assertEqual(hub.sent, [("154", "setLevel", "50")])
+
+    def test_guarded_capabilities_survive_the_interleaved_attribute_objects(self):
+        """A real hub's mixed capability list still triggers the guard.
+
+        `refresh` is used so only the capability check can refuse it.
+        """
+        lock_like = {
+            **_REAL_HUB_BULB,
+            "capabilities": [
+                "Actuator",
+                {"attributes": [{"name": "lock", "dataType": None}]},
+                "Lock",
+            ],
+            "commands": ["refresh"],
+        }
+        hub = _FakeHub(lock_like)
+        _install(self, hub, _settings(False))
+
+        with self.assertRaises(MakerApiError) as caught:
+            server.send_command("331", "refresh")
+        self.assertEqual(hub.sent, [])
+        self.assertIn("guards a physical or safety boundary", str(caught.exception))
 
 
 class GuardedDeviceTests(unittest.TestCase):
