@@ -68,6 +68,8 @@ HUBITAT_WRITABLE_DEVICE_IDS=154,200,7
 
 Leave it unset and every device that passes the checks above is commandable. If you are unsure whether such a device exists on your hub, set the list — it costs one line and removes the question.
 
+Setting it also turns off hub mode changes entirely. A mode is not a device and has no id, so it can never appear in the list; refusing it keeps the setting's promise honest rather than leaving one write path outside the fence.
+
 ## The Claude Assistant driver
 
 `drivers/claude-assistant.groovy` is a virtual device for the hub. It gives Rule Machine an `askClaude` command: pass it a question, and it publishes Claude's answer to the `lastReply` attribute, which a rule can trigger on.
@@ -82,7 +84,11 @@ Then, from Rule Machine, use **Run Custom Action** on that device and call `askC
 
 Trigger your rules on **`lastReply`**, which only ever holds an answer. Failures go to `lastError` and set `status` to `error`, so a rule waiting for an answer never fires on an error string.
 
-Three things bound what it can cost you, all adjustable in the device's preferences: a per-call token ceiling, a minimum gap between calls (5 seconds by default) so a misfiring rule cannot loop, and a daily call cap (100 by default). Both counters are charged when the request goes out rather than when an answer comes back, because Anthropic bills a refused or empty response in full — and those are exactly what a misfiring rule produces.
+Three things bound what it can cost you, all adjustable in the device's preferences: a per-call token ceiling, a minimum gap between calls (5 seconds by default) so a misfiring rule cannot loop, and a daily call cap (100 by default).
+
+Both counters are charged when the request goes out, never when the answer comes back, and nothing gives a charge back. That is deliberate: a timed-out or refused call is still billed, and a rule whose calls all fail is exactly the runaway the cap exists to stop — so a cap that only counted successes would go slack in the one case it is for.
+
+The device also refuses a second question while one is still in flight, rather than accepting it and discarding one of the two answers.
 
 Hubitat refuses to store an attribute longer than 1024 characters, so replies are capped — 500 characters by default — and the system prompt asks Claude to answer briefly.
 

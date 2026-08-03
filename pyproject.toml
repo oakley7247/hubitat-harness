@@ -9,8 +9,9 @@ name = "hubitat-claude"
 version = "0.1.0"
 description = "MCP server exposing a Hubitat Elevation hub to Claude over the local network"
 readme = "README.md"
-# 3.11.9 is the floor because IPv4-mapped IPv6 addresses report
-# is_global incorrectly before it, which config.py depends on.
+# 3.11.9 carries CPython's corrections to IPv6 address classification.
+# config.py unwraps the IPv4-embedding forms itself rather than relying on
+# that delegation, so the floor is defence in depth rather than a dependency.
 requires-python = ">=3.11.9"
 license = { text = "MIT" }
 dependencies = [
