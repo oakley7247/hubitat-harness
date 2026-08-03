@@ -1,0 +1,22 @@
+# =============================================================================
+# dependabot.yml — automated dependency update PRs. Rules:
+# standards/deployment-operations.md and secure-coding-standard.md A03.
+# All update PRs must pass CI via branch protection before merge; the
+# 3-day cooldown keeps same-day-compromised releases out (security fixes
+# bypass cooldown by design).
+# =============================================================================
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+  # This project has a pyproject.toml, so the pip ecosystem applies.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
