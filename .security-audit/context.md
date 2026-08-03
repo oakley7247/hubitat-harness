@@ -40,9 +40,9 @@ No database, no cache, no log files of its own.
 **Authorization is enforced in two places in `src/hubitat_claude/server.py`:**
 
 1. `send_command` fetches the device from the hub and refuses any command not in that device's own reported command list. The allowlist comes from the hub on each call, not from a list carried in this code and not from the model.
-2. Devices carrying `Lock`, `DoorControl`, `GarageDoorControl`, `Valve`, `SecurityKeypad`, or `Alarm` are refused unless `HUBITAT_ALLOW_SECURITY_COMMANDS` is explicitly true, and so are all hub mode changes. Default is false. The check fails closed: a device whose capability list the hub omitted or returned in an unexpected shape is refused rather than treated as unguarded.
+2. Devices carrying `Lock`, `DoorControl`, `GarageDoorControl`, `Valve`, `SecurityKeypad`, or `Alarm` are refused unless `HUBITAT_ALLOW_SECURITY_COMMANDS` is explicitly true, and so are all hub mode changes. Default is false. The check fails closed on what parsing produced, not on the raw shape: a capability list that is missing, not a list, empty, or made only of entries that yield no capability name is refused rather than read as "this device guards nothing".
 3. Commands named for opening, closing, locking, unlocking, or arming (`GUARDED_COMMANDS`) are refused on any device whatever it reports, because a garage door, gate, or door strike is commonly wired as a plain relay reporting only `Switch`.
-4. When `HUBITAT_WRITABLE_DEVICE_IDS` is set, only those device ids may be commanded at all. Unset by default, which means every device that passes the checks above.
+4. When `HUBITAT_WRITABLE_DEVICE_IDS` is set, `send_command` refuses every device not named in it, and `set_mode` is refused outright — a mode has no device id, so it cannot be listed, and leaving it reachable would put one write path outside the fence the setting draws. Unset by default, which means every device that passes the checks above and no restriction on modes.
 
 **Residual risk, stated plainly:** a device that guards a physical boundary, reports no guarded capability, and is commanded by an ordinary name such as `on` is not covered by checks 2 or 3. Check 4 is the answer, and it is opt-in. Anyone deploying this should set it if such a device exists on the hub.
 

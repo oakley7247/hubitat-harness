@@ -153,6 +153,15 @@ void askClaude(String prompt) {
     if (!withinCallBudget()) {
         return
     }
+    // Refusing a concurrent ask is better than accepting it and dropping one
+    // of the two answers: a rule waiting on lastReply would otherwise wait
+    // forever for a reply that was silently discarded, having already paid
+    // for it.
+    Long inFlightUntil = (atomicState.inFlightUntil ?: 0L) as Long
+    if (now() < inFlightUntil) {
+        fail("Refused: a question is already in flight. Wait for the reply, or for the ${HTTP_TIMEOUT_SECONDS}s timeout.")
+        return
+    }
 
     sendEvent(name: "lastAsked", value: clampToAttribute(trimmed), isStateChange: true)
     sendEvent(name: "status", value: "waiting")
@@ -181,10 +190,13 @@ void askClaude(String prompt) {
         timeout: HTTP_TIMEOUT_SECONDS
     ]
 
-    // Correlates this request with its callback so a late answer to a
-    // superseded question cannot overwrite a newer one.
+    // Correlates this request with its callback so a late answer cannot
+    // overwrite a newer one. The in-flight marker expires on its own after the
+    // HTTP timeout, so a callback the hub never delivers cannot wedge the
+    // device permanently.
     String requestId = "${now()}-${Math.abs(trimmed.hashCode())}".toString()
     atomicState.currentRequestId = requestId
+    atomicState.inFlightUntil = now() + (HTTP_TIMEOUT_SECONDS * 1000L)
 
     if (logEnable) log.debug "asking Claude (${trimmed.length()} chars, model ${settings.model})"
     // SECURITY: `params` holds the API key in its headers. It is passed
@@ -215,16 +227,24 @@ void claudeCallback(resp, Map data) {
     // twenty-four requests can be in flight, and callbacks can land in any
     // order. A late answer to a superseded question would otherwise overwrite
     // a newer one, pairing lastReply with the wrong lastAsked.
-    if (requestId != null && requestId != atomicState.currentRequestId) {
-        if (logEnable) log.debug "discarding a reply to superseded request ${requestId}"
+    // A missing id is treated as stale rather than trusted: the only caller
+    // supplies one, so its absence means this callback is not what it claims.
+    if (requestId == null || requestId != atomicState.currentRequestId) {
+        log.warn "Claude Assistant: discarded a reply that does not match the request in flight"
         return
     }
+    atomicState.inFlightUntil = 0L
 
     if (resp.hasError()) {
         // Fail closed and loud: an unreachable API is reported, never silently
-        // left as a stale reply from an earlier question. A transport failure
-        // never reached Anthropic, so its budget charge is returned.
-        refundCall()
+        // left as a stale reply from an earlier question.
+        //
+        // SECURITY: the daily charge is NOT returned here. hasError() covers
+        // HTTP error statuses and client-side timeouts as well as connection
+        // failures, and a timed-out generation was already dispatched and is
+        // still billed. Refunding would mean a rule whose calls all fail never
+        // advances the counter — and a rule whose calls all fail is exactly
+        // the runaway this cap exists to stop.
         fail("Request failed: ${resp.getErrorMessage()}")
         return
     }
@@ -331,17 +351,6 @@ private boolean withinCallBudget() {
     atomicState.callCount = used + 1
     sendEvent(name: "callsToday", value: used + 1)
     return true
-}
-
-/** Return one dispatched call to the daily budget after a transport failure. */
-private void refundCall() {
-    // Only a request that never reached Anthropic is refunded — a transport
-    // error, not any HTTP response, since every response is billed. Floored at
-    // zero so a double refund cannot raise the effective ceiling.
-    Integer used = (atomicState.callCount ?: 0) as Integer
-    Integer refunded = Math.max(0, used - 1)
-    atomicState.callCount = refunded
-    sendEvent(name: "callsToday", value: refunded)
 }
 
 /** @return The current hub-local date as a yyyy-MM-dd key. */

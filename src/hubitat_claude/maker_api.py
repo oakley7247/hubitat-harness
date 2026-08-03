@@ -49,8 +49,9 @@ _ARGUMENT_FORBIDDEN = frozenset("/?#&%,")
 # truncated, because a truncated JSON document parses as an error anyway.
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
-# Read granularity. Small enough that the deadline is checked often, large
-# enough that a normal response takes few iterations.
+# Read granularity. This is an upper bound per iteration, not a demand: the
+# loop uses read1, which returns whatever has arrived rather than waiting for
+# the full amount.
 _READ_CHUNK_BYTES = 64 * 1024
 
 
@@ -165,25 +166,71 @@ class MakerApiClient:
             MakerApiUnavailableError: The hub was still sending after the
                 timeout had elapsed across the whole read.
         """
-        # NOTE: the socket timeout applies per read, not to the read as a
-        # whole, so a hub trickling one byte just inside each window would hold
-        # this open forever. The deadline bounds the total, which is the thing
-        # an MCP tool call actually waits on.
+        # SECURITY: the socket timeout applies per read *operation*, and it
+        # resets on every byte received. A between-reads deadline check alone
+        # is therefore not a bound: `read(n)` blocks until n bytes arrive, so a
+        # peer trickling one byte just inside each window keeps a single call
+        # blocked far past the deadline, which is never re-evaluated. Two
+        # things make the bound real. The socket's own timeout is tightened to
+        # whatever budget is left before each read, so a stalled read raises
+        # rather than waiting; and the chunk is small, which caps how much a
+        # single blocking call can be asked to wait for if the socket cannot be
+        # reached to tighten.
+        # SECURITY: read1 rather than read. `read(n)` blocks until it has all n
+        # bytes, so a peer dribbling data stays inside one call indefinitely and
+        # the loop's deadline check never runs — the bound would exist on paper
+        # and not in fact. read1 returns as soon as any data is available, which
+        # is what lets the check below actually fire. Falling back to read keeps
+        # a response object that lacks read1 working, at the cost of the
+        # tightened socket timeout being the only bound.
+        read = getattr(response, "read1", None) or response.read
+
         deadline = time.monotonic() + self._config.timeout_seconds
         remaining = _MAX_RESPONSE_BYTES + 1
         chunks: list[bytes] = []
         while remaining > 0:
-            if time.monotonic() > deadline:
+            left = deadline - time.monotonic()
+            if left <= 0:
                 raise MakerApiUnavailableError(
                     f"The hub was still sending a response for /{safe_path} after "
                     f"{self._config.timeout_seconds} seconds."
                 )
-            chunk = response.read(min(_READ_CHUNK_BYTES, remaining))
+            self._tighten_socket_timeout(response, left)
+            try:
+                chunk = read(min(_READ_CHUNK_BYTES, remaining))
+            except TimeoutError as error:
+                raise MakerApiUnavailableError(
+                    f"The hub stalled partway through its response for /{safe_path}."
+                ) from error
             if not chunk:
                 break
             chunks.append(chunk)
             remaining -= len(chunk)
         return b"".join(chunks)
+
+    @staticmethod
+    def _tighten_socket_timeout(response: Any, seconds: float) -> None:
+        """Lower the underlying socket's timeout to the time budget left.
+
+        Args:
+            response: The open HTTP response.
+            seconds: Remaining budget; the socket will not wait longer.
+        """
+        # NOTE: urllib exposes no public way to adjust the timeout mid-response,
+        # so this reaches through http.client's buffered reader to the socket.
+        # It is best effort by design — the private chain can be absent on a
+        # wrapped or mocked response, and the small chunk size above is what
+        # keeps the bound meaningful when that happens.
+        sock = getattr(getattr(response, "fp", None), "raw", None)
+        sock = getattr(sock, "_sock", None)
+        if sock is None:
+            return
+        try:
+            sock.settimeout(max(0.05, seconds))
+        except OSError:
+            # A closed or detached socket needs no timeout; the read that
+            # follows will fail on its own and be reported by the caller.
+            return
 
     def _request(self, *segments: str) -> Any:
         """Perform one Maker API GET and return the parsed JSON body.

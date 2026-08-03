@@ -12,6 +12,7 @@
 
 import json
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -167,6 +168,68 @@ class RedirectTests(unittest.TestCase):
         )
         self.assertIsNotNone(error, "the redirect was not reported as an error")
         self.assertIn("redirected", str(error))
+
+
+class ReadDeadlineTests(unittest.TestCase):
+    def test_a_trickling_hub_is_cut_off_at_the_timeout(self):
+        """A peer sending one byte at a time is abandoned near the timeout.
+
+        The socket timeout resets on every byte, so it never fires on its own.
+        Without the wall-clock deadline this call would run for hours; the
+        assertion is on elapsed time, because "an error was raised" would pass
+        against code that raised it far too late.
+        """
+
+        class _TricklingHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "100000")
+                self.end_headers()
+                # Bounded so the handler cannot outlive the test if the
+                # client's disconnect is not observed promptly.
+                try:
+                    for _ in range(150):
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                        time.sleep(0.2)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    return
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _TricklingHandler)
+        # NOTE: ThreadingMixIn.server_close joins handler threads by default,
+        # which would make cleanup wait out the whole trickle. The handler is a
+        # daemon and its socket dies with the test, so waiting buys nothing.
+        server.block_on_close = False
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+
+        config = HubitatConfig(
+            host_ip="127.0.0.1",
+            port=port,
+            app_id="42",
+            access_token=_TOKEN,
+            timeout_seconds=2.0,
+            allow_security_commands=False,
+            writable_device_ids=None,
+        )
+
+        started = time.monotonic()
+        with self.assertRaises(MakerApiUnavailableError):
+            MakerApiClient(config).list_devices()
+        elapsed = time.monotonic() - started
+
+        self.assertLess(
+            elapsed,
+            15.0,
+            f"the read ran {elapsed:.1f}s against a 2s timeout, so the deadline "
+            "did not bound a single blocking read",
+        )
 
 
 class ProxyTests(unittest.TestCase):

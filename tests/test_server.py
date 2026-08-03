@@ -179,6 +179,29 @@ class FailClosedTests(unittest.TestCase):
         self.assertEqual(hub.sent, [])
         self.assertIn("did not report what device", str(caught.exception))
 
+    def test_a_capability_list_of_unusable_entries_is_refused(self):
+        """A non-empty list that yields no capability name is refused.
+
+        `[None]` passes a shape check but parses to nothing, which reads
+        identically to "this device guards nothing" — the fail-open case a
+        raw-shape check would miss.
+        """
+        hub = _FakeHub(
+            {
+                "id": "200",
+                "label": "Front Door",
+                "capabilities": [None, 123],
+                "commands": [{"command": "refresh"}],
+                "attributes": [],
+            }
+        )
+        _install(self, hub, _settings(False))
+
+        with self.assertRaises(MakerApiError) as caught:
+            server.send_command("200", "refresh")
+        self.assertEqual(hub.sent, [])
+        self.assertIn("did not report what device", str(caught.exception))
+
     def test_a_capability_reported_as_an_object_still_guards(self):
         """Hubitat's object form of a capability entry is matched, not skipped.
 
@@ -257,6 +280,29 @@ class WritableAllowlistTests(unittest.TestCase):
 
         server.send_command("154", "on")
         self.assertEqual(hub.sent, [("154", "on", None)])
+
+    def test_setting_a_mode_is_refused_while_an_allowlist_is_in_force(self):
+        """A mode change is refused when the allowlist is set, even with the flag on.
+
+        A mode has no device id, so it can never appear in the list — an
+        operator who enumerated writable devices has not authorized it. The
+        guarded-command flag is on here so that only the allowlist can refuse.
+        """
+        hub = _FakeHub(_SWITCH)
+        _install(self, hub, _settings(True, writable_device_ids=frozenset({"154"})))
+
+        with self.assertRaises(MakerApiError) as caught:
+            server.set_mode("2")
+        self.assertEqual(hub.sent, [])
+        self.assertIn("HUBITAT_WRITABLE_DEVICE_IDS", str(caught.exception))
+
+    def test_setting_a_mode_still_works_with_no_allowlist(self):
+        """Without an allowlist the mode change proceeds, isolating the cause."""
+        hub = _FakeHub(_SWITCH)
+        _install(self, hub, _settings(True, writable_device_ids=None))
+
+        server.set_mode("2")
+        self.assertEqual(hub.sent, [("mode", "2", None)])
 
 
 class PayloadBoundTests(unittest.TestCase):

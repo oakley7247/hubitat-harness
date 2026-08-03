@@ -120,6 +120,30 @@ class LoadConfigTests(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config()
 
+    def test_teredo_address_embedding_a_public_client_is_refused(self):
+        """A Teredo address is refused despite CPython calling 2001::/32 private.
+
+        The embedded client address is where the traffic goes, so judging the
+        wrapper would admit a public destination outright. This literal encodes
+        8.8.8.8 as its client — the client field is stored bitwise-inverted, so
+        8.8.8.8 appears as f7f7:f7f7.
+        """
+        teredo = "2001:0:4136:e378:8000:63bf:f7f7:f7f7"
+        with mock.patch.dict("os.environ", _env(HUBITAT_HOST=teredo), clear=True):
+            with self.assertRaises(ConfigError):
+                load_config()
+
+    def test_teredo_address_embedding_a_private_client_is_accepted(self):
+        """A Teredo address whose client is itself private is allowed through.
+
+        The positive half of the rule: the check judges the embedded
+        destination, so it must permit one that really is on a private network
+        rather than rejecting the address family wholesale.
+        """
+        teredo = "2001:0:4136:e378:8000:63bf:3fff:fdd2"  # client 192.0.2.45
+        with mock.patch.dict("os.environ", _env(HUBITAT_HOST=teredo), clear=True):
+            self.assertEqual(load_config().host_ip, teredo)
+
     def test_private_ipv6_address_is_accepted(self):
         """A unique-local IPv6 hub loads, proving the check is not IPv4-only."""
         with mock.patch.dict("os.environ", _env(HUBITAT_HOST="fd00::1"), clear=True):

@@ -96,15 +96,21 @@ def _unwrap(
         address: A parsed IP address.
 
     Returns:
-        The embedded IPv4 address for IPv4-mapped (::ffff:8.8.8.8) and 6to4
-        (2002::/16) forms, otherwise the address as given.
+        The embedded IPv4 address for IPv4-mapped (::ffff:8.8.8.8), 6to4
+        (2002::/16), and Teredo (2001::/32) forms, otherwise the address as
+        given.
     """
-    # NOTE: both forms carry a public IPv4 destination inside an IPv6 literal.
-    # Judging the wrapper rather than the payload would let one past — and on
-    # Python 3.11.0 through 3.11.8 the IPv4-mapped form reports is_global False
-    # on its own, which is why the floor in pyproject.toml is 3.11.9.
+    # SECURITY: all three forms carry a public IPv4 destination inside an IPv6
+    # literal, and the wrapper's own classification does not reflect where the
+    # traffic goes. Teredo is the one that bites hardest: CPython reports a
+    # 2001::/32 address as is_private True, because the range is an IETF
+    # protocol assignment — so judging the wrapper would admit it outright.
+    # Teredo's second element is the client address, which is the destination.
     if isinstance(address, ipaddress.IPv6Address):
-        return address.ipv4_mapped or address.sixtofour or address
+        teredo = address.teredo
+        return (
+            address.ipv4_mapped or address.sixtofour or (teredo[1] if teredo else None) or address
+        )
     return address
 
 
@@ -127,10 +133,10 @@ def _resolve_private_ip(host: str) -> str:
     #
     # The test is an allowlist — the address must be private or loopback — not
     # a denylist of `is_global`. Refusing only what is global would admit
-    # carrier-grade NAT (100.64.0.0/10, which is also Tailscale's range),
-    # 6to4 addresses that embed an arbitrary public IPv4, and 240.0.0.0/4.
-    # IPv4-mapped and 6to4 forms are unwrapped first, because the embedded
-    # address is where the traffic actually goes.
+    # carrier-grade NAT (100.64.0.0/10, which is also Tailscale's range) and
+    # 6to4 addresses embedding an arbitrary public IPv4. The IPv6 forms that
+    # wrap an IPv4 destination are unwrapped first (see _unwrap), because the
+    # embedded address is where the traffic actually goes.
     try:
         resolved = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except socket.gaierror as error:

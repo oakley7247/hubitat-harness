@@ -202,25 +202,29 @@ def _refuse_if_guarded(device_id: str, device: dict[str, Any], command: str) -> 
             describe the device's capabilities at all.
     """
     raw_capabilities = device.get("capabilities")
-    # SECURITY: fail closed on an unrecognized shape. Treating a missing or
-    # malformed capability list as "no capabilities" would make an unlock on a
-    # lock look unguarded — the safety-critical branch must refuse when it
-    # cannot tell, not permit.
-    if not isinstance(raw_capabilities, list) or not raw_capabilities:
+    capabilities: set[str] = set()
+    if isinstance(raw_capabilities, list):
+        for entry in raw_capabilities:
+            if isinstance(entry, str):
+                capabilities.add(entry)
+            elif isinstance(entry, dict):
+                # Hubitat interleaves object entries carrying a capability's
+                # attribute list; the key is still the capability name.
+                capabilities.update(str(key) for key in entry)
+
+    # SECURITY: fail closed on anything that did not yield a usable capability
+    # name — a missing key, a non-list, an empty list, or a list whose entries
+    # are all nulls or numbers. The test is on what parsing *produced*, not on
+    # the raw shape: a non-empty list of unusable entries would otherwise pass
+    # a shape check and then leave this set empty, which reads identically to
+    # "this device guards nothing". A lock must not look unguarded because its
+    # capability list arrived malformed.
+    if not capabilities:
         raise MakerApiError(
             f"Refused: the hub did not report what device {device_id} can do, so "
             "this server cannot tell whether commanding it is safe. Enabling "
             "HUBITAT_ALLOW_SECURITY_COMMANDS would allow it."
         )
-
-    capabilities: set[str] = set()
-    for entry in raw_capabilities:
-        if isinstance(entry, str):
-            capabilities.add(entry)
-        elif isinstance(entry, dict):
-            # Hubitat interleaves object entries carrying a capability's
-            # attribute list; the key is still the capability name.
-            capabilities.update(str(key) for key in entry)
 
     guarded = capabilities & GUARDED_CAPABILITIES
     if guarded:
@@ -398,7 +402,8 @@ def set_mode(mode_id: str) -> dict[str, Any]:
         The hub's updated mode list, wrapped with its provenance.
 
     Raises:
-        MakerApiError: Guarded commands are disabled, or the hub refused.
+        MakerApiError: Guarded commands are disabled, a writable-device
+            allowlist is in force, or the hub refused.
     """
     # SECURITY: mode is gated with the locks and alarms rather than with the
     # lights, because on most hubs the mode drives Hubitat Safety Monitor —
@@ -408,6 +413,19 @@ def set_mode(mode_id: str) -> dict[str, Any]:
             "Refused: changing hub mode commonly arms or disarms security "
             "automations. To allow it, the hub owner must set "
             "HUBITAT_ALLOW_SECURITY_COMMANDS=true and restart this server."
+        )
+    # SECURITY: a mode has no device id, so it cannot be named in the writable
+    # list — which means an operator who enumerated that list has not
+    # authorized mode changes. Refusing here keeps the allowlist's promise
+    # ("only these devices") true of every write path, rather than of
+    # send_command alone.
+    if _settings().writable_device_ids is not None:
+        raise MakerApiError(
+            "Refused: HUBITAT_WRITABLE_DEVICE_IDS is set, which limits this "
+            "server to commanding the devices it names. A hub mode is not a "
+            "device and cannot be listed, so mode changes are off while that "
+            "setting is in force. Tell the user this rather than trying "
+            "another route."
         )
     return _wrap(_hub().set_mode(mode_id))
 
