@@ -14,6 +14,7 @@ import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest import mock
 
 from hubitat_claude.config import HubitatConfig
 from hubitat_claude.maker_api import (
@@ -74,6 +75,7 @@ def _config(port: int) -> HubitatConfig:
         access_token=_TOKEN,
         timeout_seconds=5.0,
         allow_security_commands=False,
+        writable_device_ids=None,
     )
 
 
@@ -167,6 +169,37 @@ class RedirectTests(unittest.TestCase):
         self.assertIn("redirected", str(error))
 
 
+class ProxyTests(unittest.TestCase):
+    def test_a_proxy_environment_variable_cannot_divert_the_token(self):
+        """http_proxy is ignored, so the token still goes only to the hub.
+
+        urllib seeds a ProxyHandler from the inherited environment by default.
+        Left alone, one variable would send the token-bearing URL to another
+        host in cleartext, bypassing the private-address check entirely.
+        """
+        proxy, proxy_port = _start_server(self, body=b"[]")
+        hub, hub_port = _start_server(self, body=b'[{"id": "1"}]')
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "http_proxy": f"http://127.0.0.1:{proxy_port}",
+                "HTTP_PROXY": f"http://127.0.0.1:{proxy_port}",
+                "ALL_PROXY": f"http://127.0.0.1:{proxy_port}",
+            },
+            clear=False,
+        ):
+            result = MakerApiClient(_config(hub_port)).list_devices()
+
+        self.assertEqual(
+            proxy.received,  # type: ignore[attr-defined]
+            [],
+            "the proxy received the request, so the access token was sent off-host",
+        )
+        self.assertEqual(len(hub.received), 1)  # type: ignore[attr-defined]
+        self.assertEqual(result, [{"id": "1"}])
+
+
 class ValidationTests(unittest.TestCase):
     def test_non_ascii_digit_device_id_is_refused(self):
         """A Unicode digit is refused rather than reaching the hub as garbage."""
@@ -183,6 +216,15 @@ class ValidationTests(unittest.TestCase):
     def test_command_argument_accepts_a_normal_value(self):
         """A dimmer level passes, proving the filter permits legitimate input."""
         self.assertEqual(validate_command_argument("50"), "50")
+
+    def test_command_argument_refuses_a_comma(self):
+        """A comma is refused: the hub splits an argument segment on it.
+
+        Percent-encoding does not help — Hubitat splits after decoding — so one
+        argument carrying a comma would arrive at the device as several.
+        """
+        with self.assertRaises(MakerApiError):
+            validate_command_argument("50,999")
 
     def test_command_argument_refuses_url_delimiters(self):
         """A slash is refused, because the hub splits the path on it."""

@@ -13,6 +13,7 @@
 
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,7 +34,11 @@ _COMMAND_PATTERN = re.compile(r"\A[A-Za-z][A-Za-z0-9]{0,63}\Z")
 # change the URL's shape. Control characters are excluded so a value cannot
 # forge a log line downstream (ledger LL-2).
 _ARGUMENT_PATTERN = re.compile(r"\A[ -~]{1,128}\Z")
-_ARGUMENT_FORBIDDEN = frozenset("/?#&%")
+# The comma is in this set because Hubitat splits a command's argument segment
+# into a list on commas — and it does so after decoding, so percent-encoding it
+# does not prevent the split. One argument containing a comma would silently
+# become several arguments at the device.
+_ARGUMENT_FORBIDDEN = frozenset("/?#&%,")
 
 # --- Bounds ------------------------------------------------------------------
 
@@ -43,6 +48,10 @@ _ARGUMENT_FORBIDDEN = frozenset("/?#&%")
 # memory in this process. Above the cap the read is refused rather than
 # truncated, because a truncated JSON document parses as an error anyway.
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
+# Read granularity. Small enough that the deadline is checked often, large
+# enough that a normal response takes few iterations.
+_READ_CHUNK_BYTES = 64 * 1024
 
 
 class MakerApiError(Exception):
@@ -95,12 +104,17 @@ def validate_command_argument(argument: str) -> str:
     """
     _validated_segment(argument, _ARGUMENT_PATTERN, "command argument")
     # SECURITY: Maker API passes command arguments as path segments and splits
-    # multiple arguments on commas. Percent-encoding would hide these from the
-    # URL parser but not from the hub's own splitting, so the delimiters are
-    # rejected outright rather than escaped (ledger LL-9: neutralize the
-    # downstream grammar, do not trust a general-purpose encoder to know it).
+    # a multi-argument segment on commas, after percent-decoding. Encoding
+    # would hide a delimiter from the URL parser but not from the hub's own
+    # splitting, so every delimiter is rejected outright rather than escaped
+    # (ledger LL-9: neutralize the downstream grammar, do not trust a
+    # general-purpose encoder to know it exists). The comma matters most —
+    # this server's contract is one argument per command, and admitting a
+    # comma would let a caller reach positional parameters never offered.
     if any(character in _ARGUMENT_FORBIDDEN for character in argument):
-        raise MakerApiError(f"Command argument may not contain any of / ? # & % — got {argument!r}")
+        raise MakerApiError(
+            f"Command argument may not contain a comma or any of / ? # & % — got {argument!r}"
+        )
     return argument
 
 
@@ -126,7 +140,50 @@ class MakerApiClient:
             config: Validated hub connection settings.
         """
         self._config = config
-        self._opener = urllib.request.build_opener(_NoRedirectHandler)
+        # SECURITY: the empty ProxyHandler suppresses urllib's default, which
+        # seeds itself from http_proxy/HTTP_PROXY/ALL_PROXY in the inherited
+        # environment. Without it, one environment variable would route the
+        # token-bearing URL to an arbitrary host in cleartext — bypassing the
+        # private-address check and the pinned literal entirely. A call to a
+        # known LAN address has no reason to traverse a proxy.
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirectHandler
+        )
+
+    def _read_bounded(self, response: Any, safe_path: str) -> bytes:
+        """Read a response body under both a size cap and a wall-clock deadline.
+
+        Args:
+            response: The open HTTP response.
+            safe_path: The token-free request path, for error messages.
+
+        Returns:
+            The body, up to one byte past the cap so an over-large body is
+            detectable rather than silently truncated into invalid JSON.
+
+        Raises:
+            MakerApiUnavailableError: The hub was still sending after the
+                timeout had elapsed across the whole read.
+        """
+        # NOTE: the socket timeout applies per read, not to the read as a
+        # whole, so a hub trickling one byte just inside each window would hold
+        # this open forever. The deadline bounds the total, which is the thing
+        # an MCP tool call actually waits on.
+        deadline = time.monotonic() + self._config.timeout_seconds
+        remaining = _MAX_RESPONSE_BYTES + 1
+        chunks: list[bytes] = []
+        while remaining > 0:
+            if time.monotonic() > deadline:
+                raise MakerApiUnavailableError(
+                    f"The hub was still sending a response for /{safe_path} after "
+                    f"{self._config.timeout_seconds} seconds."
+                )
+            chunk = response.read(min(_READ_CHUNK_BYTES, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
     def _request(self, *segments: str) -> Any:
         """Perform one Maker API GET and return the parsed JSON body.
@@ -167,9 +224,7 @@ class MakerApiClient:
 
         try:
             with self._opener.open(url, timeout=self._config.timeout_seconds) as response:
-                # Read one byte past the cap so an over-large body is detected
-                # rather than silently truncated into invalid JSON.
-                raw = response.read(_MAX_RESPONSE_BYTES + 1)
+                raw = self._read_bounded(response, safe_path)
                 status = response.status
         except urllib.error.HTTPError as error:
             if error.code in (401, 403):
@@ -203,7 +258,7 @@ class MakerApiClient:
 
         try:
             payload = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
             raise MakerApiUnavailableError(
                 f"The hub's response to /{safe_path} was not valid JSON. This "
                 "usually means the app id belongs to something other than a "

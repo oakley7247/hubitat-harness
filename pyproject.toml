@@ -9,7 +9,9 @@ name = "hubitat-claude"
 version = "0.1.0"
 description = "MCP server exposing a Hubitat Elevation hub to Claude over the local network"
 readme = "README.md"
-requires-python = ">=3.11"
+# 3.11.9 is the floor because IPv4-mapped IPv6 addresses report
+# is_global incorrectly before it, which config.py depends on.
+requires-python = ">=3.11.9"
 license = { text = "MIT" }
 dependencies = [
     # The official Model Context Protocol SDK. Implementing the protocol's

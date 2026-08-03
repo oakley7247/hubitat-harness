@@ -40,7 +40,7 @@ class LoadConfigTests(unittest.TestCase):
         with mock.patch.dict("os.environ", _env(HUBITAT_HOST="93.184.216.34"), clear=True):
             with self.assertRaises(ConfigError) as caught:
                 load_config()
-        self.assertIn("public address", str(caught.exception))
+        self.assertIn("not on a private network", str(caught.exception))
 
     def test_accepts_loopback_as_private(self):
         """Loopback counts as private, which is what makes local testing work."""
@@ -95,6 +95,52 @@ class LoadConfigTests(unittest.TestCase):
         """A Unicode digit is refused, rather than crashing or silently converting."""
         env = _env()
         env["HUBITAT_PORT"] = "8²"
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(ConfigError):
+                load_config()
+
+    def test_carrier_grade_nat_address_is_refused(self):
+        """100.64.0.0/10 is refused: it is routable beyond the local network.
+
+        It is not `is_global`, so a deny-public check would have admitted it.
+        """
+        with mock.patch.dict("os.environ", _env(HUBITAT_HOST="100.64.1.1"), clear=True):
+            with self.assertRaises(ConfigError):
+                load_config()
+
+    def test_ipv4_mapped_public_address_is_refused(self):
+        """::ffff:8.8.8.8 is refused: the traffic goes to the embedded IPv4 host."""
+        with mock.patch.dict("os.environ", _env(HUBITAT_HOST="::ffff:8.8.8.8"), clear=True):
+            with self.assertRaises(ConfigError):
+                load_config()
+
+    def test_sixtofour_public_address_is_refused(self):
+        """A 6to4 address embedding a public IPv4 is refused for the same reason."""
+        with mock.patch.dict("os.environ", _env(HUBITAT_HOST="2002:0808:0808::1"), clear=True):
+            with self.assertRaises(ConfigError):
+                load_config()
+
+    def test_private_ipv6_address_is_accepted(self):
+        """A unique-local IPv6 hub loads, proving the check is not IPv4-only."""
+        with mock.patch.dict("os.environ", _env(HUBITAT_HOST="fd00::1"), clear=True):
+            self.assertEqual(load_config().host_ip, "fd00::1")
+
+    def test_writable_device_ids_default_to_unrestricted(self):
+        """Leaving the allowlist unset means every device, which is the default."""
+        with mock.patch.dict("os.environ", _env(), clear=True):
+            self.assertIsNone(load_config().writable_device_ids)
+
+    def test_writable_device_ids_parse_a_comma_separated_list(self):
+        """A populated allowlist parses into the exact set given."""
+        env = _env()
+        env["HUBITAT_WRITABLE_DEVICE_IDS"] = "154, 200,7"
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual(load_config().writable_device_ids, frozenset({"154", "200", "7"}))
+
+    def test_non_numeric_writable_device_id_is_refused(self):
+        """A malformed entry fails at startup rather than silently never matching."""
+        env = _env()
+        env["HUBITAT_WRITABLE_DEVICE_IDS"] = "154,porch-light"
         with mock.patch.dict("os.environ", env, clear=True):
             with self.assertRaises(ConfigError):
                 load_config()

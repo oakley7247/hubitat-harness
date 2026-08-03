@@ -10,7 +10,8 @@ Everything stays on your local network. The server refuses any hub address that 
 git clone https://github.com/oakley7247/hubitat-claude.git
 cd hubitat-claude
 uv venv --python 3.14 .venv
-uv pip install -e .
+uv pip install --require-hashes -r requirements.lock
+uv pip install -e . --no-deps
 ```
 
 ## Set up the hub
@@ -57,6 +58,16 @@ One is worth understanding before you change it:
 
 The reason for the default is that device names and sensor values flow into Claude's context, and anyone who can name a device can write text that Claude reads. Turning this on means text hidden in a device label could talk Claude into unlocking a door. Your MCP client's approval prompt is the backstop if you do turn it on.
 
+Separately, commands named `open`, `close`, `unlock`, `arm`, `disarm` and the like are refused on **any** device while that setting is off, whatever the device claims to be — because a garage door or gate is often wired as a plain relay that reports only `Switch`.
+
+**`HUBITAT_WRITABLE_DEVICE_IDS`** closes the gap that neither of those covers. If a door, gate, or garage opener on your hub is wired as a plain switch, it declares no lock or door capability and is opened by an ordinary `on` — so nothing above recognizes it as a boundary. Set this variable to the comma-separated ids of the devices Claude may command, and everything else becomes read-only:
+
+```bash
+HUBITAT_WRITABLE_DEVICE_IDS=154,200,7
+```
+
+Leave it unset and every device that passes the checks above is commandable. If you are unsure whether such a device exists on your hub, set the list — it costs one line and removes the question.
+
 ## The Claude Assistant driver
 
 `drivers/claude-assistant.groovy` is a virtual device for the hub. It gives Rule Machine an `askClaude` command: pass it a question, and it publishes Claude's answer to the `lastReply` attribute, which a rule can trigger on.
@@ -69,7 +80,9 @@ To install it:
 
 Then, from Rule Machine, use **Run Custom Action** on that device and call `askClaude` with your prompt.
 
-Three things bound what it can cost you, all adjustable in the device's preferences: a per-call token ceiling, a minimum gap between calls (5 seconds by default) so a misfiring rule cannot loop, and a daily call cap (100 by default).
+Trigger your rules on **`lastReply`**, which only ever holds an answer. Failures go to `lastError` and set `status` to `error`, so a rule waiting for an answer never fires on an error string.
+
+Three things bound what it can cost you, all adjustable in the device's preferences: a per-call token ceiling, a minimum gap between calls (5 seconds by default) so a misfiring rule cannot loop, and a daily call cap (100 by default). Both counters are charged when the request goes out rather than when an answer comes back, because Anthropic bills a refused or empty response in full — and those are exactly what a misfiring rule produces.
 
 Hubitat refuses to store an attribute longer than 1024 characters, so replies are capped — 500 characters by default — and the system prompt asks Claude to answer briefly.
 
