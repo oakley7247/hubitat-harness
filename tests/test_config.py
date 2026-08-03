@@ -144,6 +144,17 @@ class LoadConfigTests(unittest.TestCase):
         with mock.patch.dict("os.environ", _env(HUBITAT_HOST=teredo), clear=True):
             self.assertEqual(load_config().host_ip, teredo)
 
+    def test_nat64_local_use_address_is_refused(self):
+        """A NAT64 address is refused even though CPython calls 64:ff9b:1::/48 private.
+
+        The address is not a destination but an instruction to a gateway to
+        forward to the IPv4 host encoded inside it, which may be anywhere.
+        """
+        with mock.patch.dict("os.environ", _env(HUBITAT_HOST="64:ff9b:1::808:808"), clear=True):
+            with self.assertRaises(ConfigError) as caught:
+                load_config()
+        self.assertIn("NAT64", str(caught.exception))
+
     def test_private_ipv6_address_is_accepted(self):
         """A unique-local IPv6 hub loads, proving the check is not IPv4-only."""
         with mock.patch.dict("os.environ", _env(HUBITAT_HOST="fd00::1"), clear=True):
