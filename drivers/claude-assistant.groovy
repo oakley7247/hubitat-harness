@@ -28,6 +28,7 @@ metadata {
 
         attribute "lastReply", "string"
         attribute "lastAsked", "string"
+        attribute "lastError", "string"
         attribute "status", "enum", ["idle", "waiting", "ok", "error"]
         attribute "callsToday", "number"
 
@@ -63,7 +64,7 @@ metadata {
               description: "Hard ceiling on daily spend. Resets at midnight hub time.",
               defaultValue: 100, required: true
         input name: "logEnable", type: "bool", title: "Enable debug logging",
-              defaultValue: true
+              defaultValue: false
     }
 }
 
@@ -101,19 +102,19 @@ void installed() {
     log.info "Claude Assistant installed"
     sendEvent(name: "status", value: "idle")
     sendEvent(name: "callsToday", value: 0)
-    state.callDate = todayKey()
-    state.callCount = 0
-    state.lastCallMillis = 0L
+    atomicState.callDate = todayKey()
+    atomicState.callCount = 0
+    atomicState.lastCallMillis = 0L
 }
 
 void updated() {
     log.info "Claude Assistant updated"
     log.warn "debug logging is: ${logEnable == true}"
     if (logEnable) runIn(1800, logsOff)
-    if (state.callDate == null) {
-        state.callDate = todayKey()
-        state.callCount = 0
-        state.lastCallMillis = 0L
+    if (atomicState.callDate == null) {
+        atomicState.callDate = todayKey()
+        atomicState.callCount = 0
+        atomicState.lastCallMillis = 0L
     }
 }
 
@@ -180,16 +181,22 @@ void askClaude(String prompt) {
         timeout: HTTP_TIMEOUT_SECONDS
     ]
 
+    // Correlates this request with its callback so a late answer to a
+    // superseded question cannot overwrite a newer one.
+    String requestId = "${now()}-${Math.abs(trimmed.hashCode())}".toString()
+    atomicState.currentRequestId = requestId
+
     if (logEnable) log.debug "asking Claude (${trimmed.length()} chars, model ${settings.model})"
     // SECURITY: `params` holds the API key in its headers. It is passed
     // straight to the hub's HTTP client and never logged — the debug line
     // above deliberately reports only the prompt length and the model.
-    asynchttpPost("claudeCallback", params)
+    asynchttpPost("claudeCallback", params, [requestId: requestId])
 }
 
 /** Clear the stored reply and return the device to idle. */
 void clearReply() {
     sendEvent(name: "lastReply", value: "", isStateChange: true)
+    sendEvent(name: "lastError", value: "", isStateChange: true)
     sendEvent(name: "status", value: "idle")
 }
 
@@ -199,12 +206,25 @@ void clearReply() {
  * Handle the Messages API response and publish the answer or the failure.
  *
  * @param resp The hub's AsyncResponse for the call.
- * @param data Unused callback data.
+ * @param data Carries requestId, the correlation key for this call.
  */
 void claudeCallback(resp, Map data) {
+    String requestId = data?.requestId as String
+
+    // NOTE: with a 5-second minimum gap and a 120-second timeout, up to
+    // twenty-four requests can be in flight, and callbacks can land in any
+    // order. A late answer to a superseded question would otherwise overwrite
+    // a newer one, pairing lastReply with the wrong lastAsked.
+    if (requestId != null && requestId != atomicState.currentRequestId) {
+        if (logEnable) log.debug "discarding a reply to superseded request ${requestId}"
+        return
+    }
+
     if (resp.hasError()) {
         // Fail closed and loud: an unreachable API is reported, never silently
-        // left as a stale reply from an earlier question.
+        // left as a stale reply from an earlier question. A transport failure
+        // never reached Anthropic, so its budget charge is returned.
+        refundCall()
         fail("Request failed: ${resp.getErrorMessage()}")
         return
     }
@@ -240,7 +260,6 @@ void claudeCallback(resp, Map data) {
         return
     }
 
-    chargeCall()
     String clamped = clampToAttribute(answer.trim())
     // isStateChange forces the event even when the answer matches the previous
     // one, so a rule triggering on lastReply fires every time.
@@ -279,7 +298,7 @@ private String firstTextBlock(Map payload) {
 private boolean withinCallBudget() {
     Long now = now()
     Integer minGap = (settings.minSecondsBetweenCalls ?: 5) as Integer
-    Long since = now - ((state.lastCallMillis ?: 0L) as Long)
+    Long since = now - ((atomicState.lastCallMillis ?: 0L) as Long)
     if (since < (minGap * 1000L)) {
         fail("Refused: the last call was ${Math.round(since / 1000)}s ago and the minimum gap is ${minGap}s")
         return false
@@ -287,29 +306,42 @@ private boolean withinCallBudget() {
 
     // Reset the daily counter when the hub's date rolls over.
     String today = todayKey()
-    if (state.callDate != today) {
-        state.callDate = today
-        state.callCount = 0
+    if (atomicState.callDate != today) {
+        atomicState.callDate = today
+        atomicState.callCount = 0
     }
     Integer dailyMax = (settings.maxCallsPerDay ?: 100) as Integer
-    if (((state.callCount ?: 0) as Integer) >= dailyMax) {
-        fail("Refused: already made ${state.callCount} calls today and the daily cap is ${dailyMax}")
+    Integer used = (atomicState.callCount ?: 0) as Integer
+    if (used >= dailyMax) {
+        fail("Refused: already made ${used} calls today and the daily cap is ${dailyMax}")
         return false
     }
 
-    // The rate gap is charged here, before the request goes out, so refused
-    // and failed calls still count against it — otherwise a rule that only
-    // ever errors could retry without limit.
-    state.lastCallMillis = now
+    // SECURITY: both counters are charged here, before the request goes out,
+    // because dispatch is what costs money. Charging the daily count on a
+    // successful reply instead would miss the two responses Anthropic bills
+    // in full but that carry no answer — a safety refusal, and a reply whose
+    // thinking exhausted max_tokens. Those are exactly what a misfiring rule
+    // produces, so the cap would not bind in the case it exists for.
+    //
+    // atomicState rather than state: Hubitat persists `state` at the end of an
+    // execution, so two rules firing at once would both read a stale count and
+    // both pass. atomicState commits immediately.
+    atomicState.lastCallMillis = now
+    atomicState.callCount = used + 1
+    sendEvent(name: "callsToday", value: used + 1)
     return true
 }
 
-/** Count one billable call against the daily cap. */
-private void chargeCall() {
-    // The daily counter is charged only on a call that actually produced an
-    // answer, because that is the call that cost money.
-    state.callCount = ((state.callCount ?: 0) as Integer) + 1
-    sendEvent(name: "callsToday", value: state.callCount)
+/** Return one dispatched call to the daily budget after a transport failure. */
+private void refundCall() {
+    // Only a request that never reached Anthropic is refunded — a transport
+    // error, not any HTTP response, since every response is billed. Floored at
+    // zero so a double refund cannot raise the effective ceiling.
+    Integer used = (atomicState.callCount ?: 0) as Integer
+    Integer refunded = Math.max(0, used - 1)
+    atomicState.callCount = refunded
+    sendEvent(name: "callsToday", value: refunded)
 }
 
 /** @return The current hub-local date as a yyyy-MM-dd key. */
@@ -349,5 +381,8 @@ private String clampToAttribute(String value) {
 private void fail(String reason) {
     log.warn "Claude Assistant: ${reason}"
     sendEvent(name: "status", value: "error")
-    sendEvent(name: "lastReply", value: clampToAttribute("Error: ${reason}"), isStateChange: true)
+    // The failure goes to its own attribute rather than into lastReply. A rule
+    // triggering on lastReply is waiting for an answer, and would otherwise
+    // fire on "Error: ..." text as though it were one.
+    sendEvent(name: "lastError", value: clampToAttribute(reason), isStateChange: true)
 }

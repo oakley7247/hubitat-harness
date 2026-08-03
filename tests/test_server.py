@@ -51,8 +51,11 @@ class _FakeHub:
         return [{"id": 1, "name": "Day", "active": True}]
 
 
-def _settings(allow_security_commands: bool) -> HubitatConfig:
-    """Return a config with the guarded-command flag set as given."""
+def _settings(
+    allow_security_commands: bool,
+    writable_device_ids: frozenset[str] | None = None,
+) -> HubitatConfig:
+    """Return a config with the guarded-command flag and allowlist set as given."""
     return HubitatConfig(
         host_ip="127.0.0.1",
         port=80,
@@ -60,7 +63,18 @@ def _settings(allow_security_commands: bool) -> HubitatConfig:
         access_token="b7c1e2f3-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
         timeout_seconds=5.0,
         allow_security_commands=allow_security_commands,
+        writable_device_ids=writable_device_ids,
     )
+
+
+def _install(test: unittest.TestCase, hub: "_FakeHub", settings: HubitatConfig) -> None:
+    """Point the module's client and settings at a fake hub for one test."""
+    for patcher in (
+        mock.patch.object(server, "_client", hub),
+        mock.patch.object(server, "_config", settings),
+    ):
+        patcher.start()
+        test.addCleanup(patcher.stop)
 
 
 class CommandAllowlistTests(unittest.TestCase):
@@ -139,6 +153,131 @@ class GuardedDeviceTests(unittest.TestCase):
 
         server.send_command("154", "setLevel", "50")
         self.assertEqual(hub.sent, [("154", "setLevel", "50")])
+
+
+class FailClosedTests(unittest.TestCase):
+    """The guarded check must refuse when it cannot tell, not permit."""
+
+    def test_a_device_missing_its_capability_list_is_refused(self):
+        """A device whose capabilities the hub omitted is refused, not allowed.
+
+        The command is `refresh`, which no command-name rule covers, so the
+        only thing that can refuse it is the capability-shape check. Reading a
+        missing list as "no capabilities" would let it through.
+        """
+        no_capabilities = {
+            "id": "200",
+            "label": "Front Door",
+            "commands": [{"command": "refresh"}],
+            "attributes": [],
+        }
+        hub = _FakeHub(no_capabilities)
+        _install(self, hub, _settings(False))
+
+        with self.assertRaises(MakerApiError) as caught:
+            server.send_command("200", "refresh")
+        self.assertEqual(hub.sent, [])
+        self.assertIn("did not report what device", str(caught.exception))
+
+    def test_a_capability_reported_as_an_object_still_guards(self):
+        """Hubitat's object form of a capability entry is matched, not skipped.
+
+        `refresh` is used for the same reason as above: it isolates the
+        capability parsing from the command-name rule.
+        """
+        hub = _FakeHub(
+            {
+                "id": "200",
+                "label": "Front Door",
+                "capabilities": [{"Lock": ["lock", "unlock"]}],
+                "commands": [{"command": "refresh"}],
+                "attributes": [],
+            }
+        )
+        _install(self, hub, _settings(False))
+
+        with self.assertRaises(MakerApiError) as caught:
+            server.send_command("200", "refresh")
+        self.assertEqual(hub.sent, [])
+        self.assertIn("guards a physical or safety boundary", str(caught.exception))
+
+    def test_a_door_wired_as_a_plain_switch_is_refused_by_command_name(self):
+        """`open` is refused on a device reporting only Switch.
+
+        A garage door, gate, or door strike is commonly wired as a plain relay
+        that declares no guarded capability, so the capability check alone
+        would let it through.
+        """
+        relay = {
+            "id": "300",
+            "label": "Side Gate",
+            "capabilities": ["Switch"],
+            "commands": [{"command": "open"}, {"command": "close"}, {"command": "on"}],
+            "attributes": [],
+        }
+        hub = _FakeHub(relay)
+        _install(self, hub, _settings(False))
+
+        with self.assertRaises(MakerApiError) as caught:
+            server.send_command("300", "open")
+        self.assertEqual(hub.sent, [])
+        self.assertIn("opens, closes, locks", str(caught.exception))
+
+    def test_an_ordinary_command_on_that_same_switch_still_works(self):
+        """`on` passes on the same device, so the name check is not a blanket block."""
+        relay = {
+            "id": "300",
+            "label": "Side Gate",
+            "capabilities": ["Switch"],
+            "commands": [{"command": "open"}, {"command": "on"}],
+            "attributes": [],
+        }
+        hub = _FakeHub(relay)
+        _install(self, hub, _settings(False))
+
+        server.send_command("300", "on")
+        self.assertEqual(hub.sent, [("300", "on", None)])
+
+
+class WritableAllowlistTests(unittest.TestCase):
+    def test_a_device_outside_the_allowlist_is_refused(self):
+        """With an allowlist set, a device not on it cannot be commanded."""
+        hub = _FakeHub(_SWITCH)
+        _install(self, hub, _settings(False, writable_device_ids=frozenset({"999"})))
+
+        with self.assertRaises(MakerApiError) as caught:
+            server.send_command("154", "on")
+        self.assertEqual(hub.sent, [])
+        self.assertIn("HUBITAT_WRITABLE_DEVICE_IDS", str(caught.exception))
+
+    def test_a_device_on_the_allowlist_is_permitted(self):
+        """The same command succeeds once the device is listed."""
+        hub = _FakeHub(_SWITCH)
+        _install(self, hub, _settings(False, writable_device_ids=frozenset({"154"})))
+
+        server.send_command("154", "on")
+        self.assertEqual(hub.sent, [("154", "on", None)])
+
+
+class PayloadBoundTests(unittest.TestCase):
+    def test_an_oversized_hub_response_is_trimmed_before_it_reaches_the_model(self):
+        """A huge device list is cut down and the cut is declared, not hidden."""
+        hub = _FakeHub(_SWITCH)
+        hub.device = _SWITCH
+        _install(self, hub, _settings(False))
+        huge = [{"id": str(index), "label": "x" * 500} for index in range(1000)]
+
+        result = server._wrap(huge)
+
+        self.assertIn("truncated", result)
+        self.assertLess(len(result["data"]), len(huge))
+        self.assertGreater(len(result["data"]), 0, "trimming removed everything")
+
+    def test_a_normal_response_is_passed_through_untouched(self):
+        """A small payload is not trimmed, proving the bound does not over-trigger."""
+        result = server._wrap([{"id": "154", "label": "Porch Light"}])
+        self.assertNotIn("truncated", result)
+        self.assertEqual(result["data"], [{"id": "154", "label": "Porch Light"}])
 
 
 class ModeTests(unittest.TestCase):

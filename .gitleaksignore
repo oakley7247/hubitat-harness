@@ -1,0 +1,5 @@
+# Test fixture, not a credential. This UUID-shaped constant exists so the suite
+# can prove the Maker API token never escapes into an error message or a
+# redirect; it authenticates against nothing but a loopback server in tests.
+# See tests/test_maker_api.py::test_token_never_appears_in_an_error_message.
+b7c1e2f3-4a5b-6c7d-8e9f-0a1b2c3d4e5f

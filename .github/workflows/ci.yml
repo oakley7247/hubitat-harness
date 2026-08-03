@@ -33,8 +33,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install the package and its dependencies
-        run: pip install -e .
+      # SECURITY: --require-hashes installs exactly the versions in the
+      # lockfile and verifies each artifact's digest, so a compromised release
+      # of any transitive dependency cannot enter CI. --no-deps on the local
+      # install keeps pip from resolving anything outside the lockfile.
+      - name: Install pinned dependencies
+        run: pip install --require-hashes -r requirements.lock
+      - name: Install the package
+        run: pip install -e . --no-deps
       - name: Run unit tests
         run: python -m unittest discover -s . -p "test_*.py" -v
 
@@ -65,8 +71,10 @@ jobs:
         run: pip install mypy==1.19.1
       # Strict on source; tests are exempt from strict annotation. The package
       # is installed first so mypy resolves the mcp SDK's own types.
-      - name: Install the package and its dependencies
-        run: pip install -e .
+      - name: Install pinned dependencies
+        run: pip install --require-hashes -r requirements.lock
+      - name: Install the package
+        run: pip install -e . --no-deps
       - name: Type check
         run: mypy --strict --exclude tests .
 
@@ -91,13 +99,12 @@ jobs:
         run: pip install bandit==1.9.4 pip-audit==2.9.0
       - name: Static security analysis
         run: bandit -r . -q -x ./tests
-      # Dependencies are declared in pyproject.toml, so the environment is
-      # installed and then audited in place — there is no requirements.txt to
-      # point the scanner at.
-      - name: Install the package and its dependencies
-        run: pip install -e .
+      # SECURITY: the audit reads the lockfile rather than an installed
+      # environment, so nothing under review executes before it is scanned.
+      # Auditing after an install would run each package's import-time code
+      # first, which is exactly the supply-chain step being guarded against.
       - name: Dependency audit
-        run: pip-audit --strict
+        run: pip-audit -r requirements.lock --strict
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:

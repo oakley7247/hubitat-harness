@@ -15,7 +15,7 @@ Let Sean control and query his Hubitat Elevation hub from Claude, and let the hu
 
 - **No remote access.** The MCP server refuses any hub address that is not on a private network, and never uses Hubitat's cloud relay.
 - **No autonomous control from the hub side.** The Groovy driver only generates text. It cannot issue device commands.
-- **No commands to locks, doors, garage doors, valves, security keypads, or alarms**, and no hub mode changes, unless Sean sets `HUBITAT_ALLOW_SECURITY_COMMANDS=true`.
+- **No commands to devices reporting a Lock, DoorControl, GarageDoorControl, Valve, SecurityKeypad, or Alarm capability**, no commands named for opening, closing, locking, unlocking, or arming whatever the device reports, and no hub mode changes — unless Sean sets `HUBITAT_ALLOW_SECURITY_COMMANDS=true`. The guard keys on what the hub reports and on what the command is named; a device that guards a boundary while reporting neither is not covered, which is what `HUBITAT_WRITABLE_DEVICE_IDS` exists for.
 - **No scheduling of its own.** Rule Machine already schedules; this adds nothing on top.
 - **No voice interface, and no always-on listening.**
 

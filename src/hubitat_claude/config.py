@@ -52,6 +52,9 @@ class HubitatConfig:
         allow_security_commands: Whether commands to locks, garage doors,
             valves, keypads, and alarms — plus hub mode changes — are
             permitted. Defaults to False.
+        writable_device_ids: The only devices that may be commanded, or None
+            when the operator has not narrowed it. None is the default and
+            means every device that passes the guarded-device check.
     """
 
     host_ip: str
@@ -60,6 +63,7 @@ class HubitatConfig:
     access_token: str
     timeout_seconds: float
     allow_security_commands: bool
+    writable_device_ids: frozenset[str] | None
 
 
 def _require_env(name: str) -> str:
@@ -83,6 +87,27 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _unwrap(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Return the IPv4 address an IPv6 form embeds, or the address unchanged.
+
+    Args:
+        address: A parsed IP address.
+
+    Returns:
+        The embedded IPv4 address for IPv4-mapped (::ffff:8.8.8.8) and 6to4
+        (2002::/16) forms, otherwise the address as given.
+    """
+    # NOTE: both forms carry a public IPv4 destination inside an IPv6 literal.
+    # Judging the wrapper rather than the payload would let one past — and on
+    # Python 3.11.0 through 3.11.8 the IPv4-mapped form reports is_global False
+    # on its own, which is why the floor in pyproject.toml is 3.11.9.
+    if isinstance(address, ipaddress.IPv6Address):
+        return address.ipv4_mapped or address.sixtofour or address
+    return address
+
+
 def _resolve_private_ip(host: str) -> str:
     """Resolve a hub address and confirm every answer is a private address.
 
@@ -98,10 +123,14 @@ def _resolve_private_ip(host: str) -> str:
     """
     # SECURITY: this integration is LAN-only by design, and the Maker API
     # carries its token in the query string over plain HTTP. A hub address
-    # pointing off the local network would hand that token to a stranger, so a
-    # globally routable answer is refused rather than warned about. Checking
-    # `is_global` uses the platform's own predicate instead of a hand-written
-    # range list, which would date and miss reserved blocks.
+    # pointing off the local network would hand that token to a stranger.
+    #
+    # The test is an allowlist — the address must be private or loopback — not
+    # a denylist of `is_global`. Refusing only what is global would admit
+    # carrier-grade NAT (100.64.0.0/10, which is also Tailscale's range),
+    # 6to4 addresses that embed an arbitrary public IPv4, and 240.0.0.0/4.
+    # IPv4-mapped and 6to4 forms are unwrapped first, because the embedded
+    # address is where the traffic actually goes.
     try:
         resolved = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except socket.gaierror as error:
@@ -117,12 +146,12 @@ def _resolve_private_ip(host: str) -> str:
 
     for address in sorted(addresses):
         # A scope suffix (fe80::1%en0) is not part of the address itself.
-        parsed = ipaddress.ip_address(address.split("%", 1)[0])
-        if parsed.is_global:
+        parsed = _unwrap(ipaddress.ip_address(address.split("%", 1)[0]))
+        if not (parsed.is_private or parsed.is_loopback):
             raise ConfigError(
-                f"HUBITAT_HOST {host!r} resolves to the public address {address}. "
-                "This server only talks to a hub on the local network, because "
-                "the Maker API sends its token in cleartext."
+                f"HUBITAT_HOST {host!r} resolves to {address}, which is not on a "
+                "private network. This server only talks to a hub on the local "
+                "network, because the Maker API sends its token in cleartext."
             )
 
     # SECURITY: returning the resolved literal — rather than the hostname —
@@ -175,6 +204,34 @@ def _load_port() -> int:
     if not 1 <= port <= 65535:
         raise ConfigError(f"HUBITAT_PORT must be between 1 and 65535, got {port}.")
     return port
+
+
+def _load_writable_device_ids() -> frozenset[str] | None:
+    """Return the device ids this server may command, or None for no restriction.
+
+    Returns:
+        A frozenset of numeric device ids, or None when the variable is unset.
+
+    Raises:
+        ConfigError: The value is set but holds an entry that is not digits.
+    """
+    raw = os.environ.get("HUBITAT_WRITABLE_DEVICE_IDS", "").strip()
+    if not raw:
+        return None
+    ids = {part.strip() for part in raw.split(",") if part.strip()}
+    if not ids:
+        raise ConfigError(
+            "HUBITAT_WRITABLE_DEVICE_IDS is set but lists no device ids. Unset "
+            "it to allow every device, rather than leaving it empty."
+        )
+    for device_id in sorted(ids):
+        if not _APP_ID_PATTERN.match(device_id):
+            raise ConfigError(
+                f"HUBITAT_WRITABLE_DEVICE_IDS contains {device_id!r}, which is "
+                "not a numeric device id. Use the ids shown by list_devices, "
+                "comma-separated."
+            )
+    return frozenset(ids)
 
 
 def _load_flag(name: str) -> bool:
@@ -238,4 +295,5 @@ def load_config() -> HubitatConfig:
         access_token=access_token,
         timeout_seconds=_load_timeout(),
         allow_security_commands=_load_flag("HUBITAT_ALLOW_SECURITY_COMMANDS"),
+        writable_device_ids=_load_writable_device_ids(),
     )
