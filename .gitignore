@@ -1,0 +1,13 @@
+# SECURITY: .env holds real secrets and must never be committed;
+# .env.example (committed) documents the variables without values.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+build/

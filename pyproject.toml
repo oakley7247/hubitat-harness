@@ -1,0 +1,51 @@
+# =============================================================================
+# pyproject.toml — project metadata, the one dependency, and tool config.
+#
+# Part of: hubitat-claude. The mcp dependency is pinned exactly (not "^" or
+# "~") so an install can never pull a version nobody reviewed.
+# =============================================================================
+[project]
+name = "hubitat-claude"
+version = "0.1.0"
+description = "MCP server exposing a Hubitat Elevation hub to Claude over the local network"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    # The official Model Context Protocol SDK. Implementing the protocol's
+    # stdio framing, JSON-RPC envelope, and capability negotiation by hand
+    # would be far more code than the server itself; nothing in the standard
+    # library speaks MCP.
+    "mcp==2.0.0",
+]
+
+[project.scripts]
+hubitat-claude = "hubitat_claude.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hubitat_claude"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "S", "RUF"]
+# S310 flags urllib.request.urlopen on a URL that could carry a non-http
+# scheme. Here the URL is built from a validated private IP literal with a
+# hardcoded http:// prefix, so the scheme cannot be attacker-chosen.
+ignore = ["S310"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert on fixture values, spin up loopback HTTP servers, and carry
+# a sample token that exists precisely to prove it never leaks. The lints
+# for asserts, socket binding, and "hardcoded password" do not apply there.
+"tests/*" = ["S101", "S104", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
