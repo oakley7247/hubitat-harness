@@ -15,6 +15,7 @@ import os
 import re
 import socket
 from dataclasses import dataclass
+from pathlib import Path
 
 # The Maker API app id is a hub-assigned integer; the token is a UUID the hub
 # mints. Both ride in a URL, so both are pattern-checked before first use
@@ -69,6 +70,9 @@ class HubitatConfig:
             None when the rules app is not installed. Optional: the rest of
             the server works without it.
         automations_token: That app's OAuth access token. Never log this.
+        rules_dir: Where to mirror the hub's rules as local JSON, or None to
+            keep no copies. None is the default: the server writes nothing to
+            disk unless an operator names a directory.
     """
 
     host_ip: str
@@ -83,6 +87,7 @@ class HubitatConfig:
     # name the fields.
     automations_app_id: str | None = None
     automations_token: str | None = None
+    rules_dir: Path | None = None
 
 
 def _require_env(name: str) -> str:
@@ -330,6 +335,32 @@ def _load_automations() -> tuple[str | None, str | None]:
     return app_id, token
 
 
+def _load_rules_dir() -> Path | None:
+    """Return the directory to mirror rules into, or None when unset.
+
+    Returns:
+        An absolute path, expanded and resolved, or None.
+
+    Raises:
+        ConfigError: The value names something that exists and is not a
+            directory. A missing directory is fine — it is created on use.
+    """
+    raw = os.environ.get("HUBITAT_RULES_DIR", "").strip()
+    if not raw:
+        return None
+    # SECURITY: this is the only path this process writes to, and it comes from
+    # the environment rather than from a tool argument — an operator decision,
+    # not the model's. It is resolved once here so every later containment
+    # check compares against a fixed absolute path.
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    resolved = path.resolve()
+    if resolved.exists() and not resolved.is_dir():
+        raise ConfigError(f"HUBITAT_RULES_DIR points at {resolved}, which is not a directory.")
+    return resolved
+
+
 def load_config() -> HubitatConfig:
     """Build a validated HubitatConfig from the process environment.
 
@@ -370,4 +401,5 @@ def load_config() -> HubitatConfig:
         writable_device_ids=_load_writable_device_ids(),
         automations_app_id=automations_app_id,
         automations_token=automations_token,
+        rules_dir=_load_rules_dir(),
     )
