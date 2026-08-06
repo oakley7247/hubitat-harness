@@ -4,6 +4,13 @@
 .env.*
 !.env.example
 
+# Local copies of the rules running on the hub. Hub state, not code — the hub
+# is the authority, and a committed copy would drift the moment a rule is
+# edited on its own page. They also map the home: which sensor guards which
+# door, and which light it drives. rules/README.md explains the folder and is
+# the one tracked file in it.
+rules/*.json
+
 .DS_Store
 __pycache__/
 *.pyc
