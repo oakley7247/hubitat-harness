@@ -75,15 +75,22 @@ Map rulePage() {
         }
 
         section("Rule spec") {
-            paragraph "Claude wrote this. Editing it by hand is allowed — it is checked " +
-                      "against your device pool exactly as Claude's version was."
-            // No defaultValue: configureRule writes the spec into this setting
-            // directly, so the value renders through Hubitat's own form-input
-            // path rather than through a string this app interpolates. That
-            // keeps a spec containing "</textarea>" from breaking out of the
-            // field, without double-escaping the JSON the operator then edits.
-            input name: "rawSpec", type: "textarea", title: "JSON", rows: 14, submitOnChange: false
-            input name: "applySpec", type: "button", title: "Apply edited spec"
+            // SECURITY: the stored spec is DISPLAYED here, escaped, and never
+            // used to populate an input. An earlier version wrote it into the
+            // textarea below and relied on Hubitat to escape a setting value —
+            // an assumption about the platform that could not be tested, on the
+            // same platform whose `paragraph` renders raw HTML by design. A
+            // spec carrying "</textarea>" would have broken out of the field
+            // and run script on an admin origin that has no login by default.
+            // Display and edit are now separate: nothing stored reaches an
+            // input, so there is no element for a payload to escape from.
+            paragraph "<b>What is stored now</b><pre>${safe(prettySpec())}</pre>"
+            paragraph "Claude wrote this. To change it by hand, paste a complete replacement " +
+                      "below — it is checked against your device pool exactly as Claude's was. " +
+                      "Leave the box empty to change nothing."
+            input name: "rawSpec", type: "textarea", title: "Replacement JSON", rows: 14,
+                  submitOnChange: false
+            input name: "applySpec", type: "button", title: "Apply replacement"
             if (state.specErrors) {
                 String listed = ((List) state.specErrors).collect { safe(it) }.join("<br>")
                 paragraph "<b>Refused:</b><br>${listed}"
@@ -119,9 +126,15 @@ void appButtonHandler(String buttonName) {
 /** Parse, validate, and store a spec edited by hand on this page. */
 private void applyEditedSpec() {
     state.specErrors = null
+    String submitted = (settings.rawSpec as String)?.trim()
+    if (!submitted) {
+        state.specErrors = ["Nothing to apply — paste a complete replacement spec first."]
+        return
+    }
+
     Map parsed
     try {
-        parsed = new JsonSlurper().parseText(settings.rawSpec as String) as Map
+        parsed = new JsonSlurper().parseText(submitted) as Map
     } catch (Exception e) {
         state.specErrors = ["That is not valid JSON: ${e.message}"]
         return
@@ -133,8 +146,23 @@ private void applyEditedSpec() {
         state.specErrors = problems
         return
     }
-    configureRule(parsed)
+
+    Map previous = getSpec()
+    try {
+        configureRule(parsed)
+    } catch (Exception e) {
+        configureRule(previous)
+        state.specErrors = ["The hub could not apply it: ${e.message}"]
+        return
+    }
     parent.resubscribeAll()
+    // The history has to cover this path too. A rule quietly changed on its own
+    // page would otherwise leave no record at all, which is exactly the case
+    // the history exists to catch.
+    parent.recordAudit("edited by hand", parsed.name as String, parsed)
+    // The box is cleared so the next view shows only what is stored, and a
+    // stale replacement cannot be reapplied by a second click.
+    app.updateSetting("rawSpec", [value: "", type: "textarea"])
     log.info "${app.getLabel()}: spec replaced by hand"
 }
 
@@ -172,7 +200,10 @@ void configureRule(Map spec) {
     // An absent `enabled` means enabled: a rule is created to run.
     Boolean wanted = (spec.enabled instanceof Boolean) ? (Boolean) spec.enabled : true
     app.updateSetting("ruleEnabled", [value: wanted.toString(), type: "bool"])
-    app.updateSetting("rawSpec", [value: JsonOutput.prettyPrint(JsonOutput.toJson(spec)), type: "textarea"])
+    // The replacement box is deliberately NOT populated from the spec — see the
+    // note on the page. It is cleared instead, so what is displayed and what is
+    // editable never share a value.
+    app.updateSetting("rawSpec", [value: "", type: "textarea"])
     refreshTriggers()
 }
 
@@ -633,6 +664,12 @@ private BigDecimal toNumber(String value) {
         // simply does not hold.
         return null
     }
+}
+
+/** @return The stored spec, pretty-printed for display. Always escaped by the caller. */
+private String prettySpec() {
+    if (!state.spec) return "{}"
+    return JsonOutput.prettyPrint(JsonOutput.toJson(state.spec))
 }
 
 /**

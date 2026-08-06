@@ -658,10 +658,19 @@ def set_rule_enabled(rule_id: str, enabled: bool) -> dict[str, Any]:
     # Disabling needs no check: it only ever removes a rule's ability to act.
     if enabled and _settings().writable_device_ids is not None:
         existing = _rules().get_rule(rule_id)
-        if isinstance(existing, dict):
-            spec = existing.get("spec")
-            if isinstance(spec, dict):
-                _refuse_unwritable_devices(spec)
+        spec = existing.get("spec") if isinstance(existing, dict) else None
+        # SECURITY: fails closed. An earlier version checked the spec only when
+        # it arrived as an object and enabled the rule otherwise, so "cannot
+        # tell what this rule touches" resolved to "let it run" — the same
+        # shape as the capability check that failed open in audit 1. A rule
+        # whose spec cannot be read cannot be shown to respect the allowlist.
+        if not isinstance(spec, dict):
+            raise AutomationsError(
+                f"Refused: the hub did not return a readable spec for rule {rule_id}, so "
+                "this server cannot tell whether it respects HUBITAT_WRITABLE_DEVICE_IDS. "
+                "Enable it from the rule's own page on the hub if you intend to."
+            )
+        _refuse_unwritable_devices(spec)
     return _wrap(_rules().set_rule_enabled(rule_id, enabled))
 
 

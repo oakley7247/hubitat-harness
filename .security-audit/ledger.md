@@ -6,14 +6,30 @@ Format: one section per audit, newest first. Every finding is listed with its ou
 
 ---
 
-## Audit 5 — uncommitted · 2026-08-05 · verdict BLOCK
+## Audit 6 — `d79c9fb` · 2026-08-05 · verdict CONDITIONAL
+
+Deploy-scope audit of the automations branch against `main`. **No regressions.** All fourteen items the ledger records as fixed across audits 1–5 were re-checked and hold, including the `http_client.py` transport extraction, which was verified line by line as control-preserving.
+
+| ID | Severity | Finding | Outcome |
+|---|---|---|---|
+| A6-CRIT-1 | Critical | The rule page's editable spec box is the one sink A5-CRIT-1's escaping fix skipped, and only `name` bans markup characters — so `notify.text`, command `args`, and attribute comparison values can carry `</textarea><script>` into a durable spec that the page then renders | **Fixed, pending re-audit.** Two changes, neither depending on platform behaviour: every string a spec persists now refuses `<` and `>` at any depth, and display is separated from editing — the stored spec renders in an escaped `<pre>` and no stored value ever populates an input. |
+| A6-HIGH-1 | High | Hubitat's cloud URL exposes the rule endpoints to the internet behind a `Host` check that is a no-op if the relay rewrites the header | **Open**, carried from A5-HIGH-1. Blocks installation. Cannot be closed from the repository. |
+| A6-MED-1 | Medium | Two paths change a rule's stored spec without an audit entry: `apiUpdateRule` lacks the rollback `apiCreateRule` got in A5-LOW-3, and the child's "Apply edited spec" button records nothing at all. A throwing `refreshTriggers` also leaves the new spec persisted with stale subscriptions after a 500 | **Fixed, pending re-audit.** The update path restores the prior spec and returns 400; hand edits record an `edited by hand` entry carrying the spec. |
+| A6-LOW-1 | Low | `set_rule_enabled` skips the writable-device allowlist when the fetched spec is not a dictionary — "cannot determine" resolving to "permit" | **Fixed, pending re-audit.** An unreadable spec now refuses the enable, with a test. |
+| A6-INF-1 | Info | `RecursionError` is uncaught in `_checked_spec`, and the depth bound added for A5-INF-4 is skipped entirely when no allowlist is set — which is the default | Fixed, pending re-audit. Caught in `_checked_spec`, with a test that nests past the recursion limit. |
+| A6-INF-2 | Info | `toLowerCase()` uses the JVM default locale in the guarded-command check; under a Turkish locale `SIREN` lowercases outside the list | Fixed, pending re-audit. Both call sites use `Locale.ROOT`. |
+| A6-INF-3 | Info | A5-INF-3 was fixed in one of three places; `SPEC-automations-app.md` still says "six tools" twice | Fixed, pending re-audit. Also corrected two other spec statements the build had outrun. |
+
+Confirmed intact: the fail-closed capability parse, the writable-device allowlist on all three write paths, the charge-after-conditions ordering, both concurrency barriers, the device-pool fence, the fire-time boundary re-check, and command dispatch gated on `hasCommand`.
+
+## Audit 5 — `d79c9fb` · 2026-08-05 · verdict BLOCK
 
 First audit of the automations component: two Hubitat apps, a shared HTTP transport extracted from `maker_api.py`, a rules client, and seven MCP tools. The extraction was verified line by line as control-preserving. The blocking finding is a class this project had not met before — output encoding.
 
 | ID | Severity | Finding | Outcome |
 |---|---|---|---|
-| A5-CRIT-1 | Critical | Model-supplied rule names and device labels reached the hub's admin page through `paragraph`, which Hubitat renders as HTML — on an origin that has no login by default, so an injected label was script with rights to install Groovy and read both tokens | **Fixed** before commit. Every interpolation in both apps goes through a `safe()` escaper at the sink; rule names additionally refuse markup characters, so the durable artifact cannot carry them either. |
-| A5-HIGH-1 | High | Hubitat publishes an internet-reachable cloud URL for any OAuth app; the `Host`-header check in front of it is unverifiable without a hub, and is a no-op if the relay rewrites the header | **Open.** Cannot be closed from the repository. Named in `SPEC-automations-app.md` open question 1 as blocking installation, and stated plainly in `README.md` rather than described as closed. |
+| A5-CRIT-1 | Critical | Model-supplied rule names and device labels reached the hub's admin page through `paragraph`, which Hubitat renders as HTML — on an origin that has no login by default, so an injected label was script with rights to install Groovy and read both tokens | **Partially fixed** before commit; verified partial by audit 6. All twelve `paragraph` sinks now escape through `safe()`, and rule names refuse markup characters. The editable spec box was left unescaped on an assumption about the platform, and the character ban covers `name` only — see A6-CRIT-1. |
+| A5-HIGH-1 | High | Hubitat publishes an internet-reachable cloud URL for any OAuth app; the `Host`-header check in front of it is unverifiable without a hub, and is a no-op if the relay rewrites the header | **Open**, carried to A6-HIGH-1. Cannot be closed from the repository. Named in `SPEC-automations-app.md` open question 1 as blocking installation, and stated plainly in `README.md` rather than described as closed. |
 | A5-MED-1 | Medium | `_refuse_unwritable_devices` walked for `deviceId` keys, so a `setMode` action — which carries none — passed the allowlist; and `set_rule_enabled` ran no spec check at all. Reopened the class `A2-MED-1` closed, through a path that did not exist then | **Fixed** before commit. `setMode` is refused while the allowlist is in force, and enabling re-checks the rule's stored spec. Both covered by tests. |
 | A5-MED-2 | Medium | The rule history stored only a timestamp, a verb, and a name — so the spec's named control against a rule written under injection did not exist | **Fixed** before commit. Each entry carries the submitted spec, capped, and the page shows the 30-day window the spec called for. |
 | A5-MED-3 | Medium | The rate trip was charged before conditions were evaluated, so three ordinary rules on a chatty sensor could stop every rule on the hub with no fault present | **Fixed** before commit. The charge moved to immediately before the actions run. Inverted the same ordering `A3-LOW-1` established. |
@@ -92,4 +108,4 @@ First audit of this repository.
 **Two facts about the deployment cannot be settled from this repository**, and both are named at the findings they affect: whether Hubitat serialises command invocations per device, and whether the hub exposes any door, gate, or garage opener as a plain switch. The second is what `HUBITAT_WRITABLE_DEVICE_IDS` exists for.
 
 ---
-**Last updated:** 2026-08-05 · after audit 5
+**Last updated:** 2026-08-05 · after audit 6

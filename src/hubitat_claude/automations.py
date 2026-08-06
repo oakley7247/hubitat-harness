@@ -175,6 +175,16 @@ class AutomationsClient:
             size = len(json.dumps(spec))
         except (TypeError, ValueError) as error:
             raise AutomationsError("The rule spec could not be serialized as JSON.") from error
+        except RecursionError as error:
+            # SECURITY: json.dumps recurses, so a deeply nested spec raises here
+            # rather than returning a size to measure. RecursionError is not an
+            # AutomationsError, so without this it escapes the tool as a crash
+            # instead of a refusal — and the depth bound in collect_device_ids
+            # does not cover this path, because that walk runs only when the
+            # operator has set a writable-device list.
+            raise AutomationsError(
+                "The rule spec nests too deeply to serialize and was refused."
+            ) from error
         if size > _MAX_SPEC_BYTES:
             raise AutomationsError(
                 f"The rule spec is {size} bytes; the limit is {_MAX_SPEC_BYTES}."

@@ -10,6 +10,7 @@
 """Tests for the Claude Automations rules client and the rule tool gate."""
 
 import json
+import sys
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -324,6 +325,15 @@ class WritableAllowlistTests(unittest.TestCase):
 
         self.assertEqual(rules.enabled, [])
 
+    def test_enabling_fails_closed_when_the_spec_cannot_be_read(self):
+        """ "Cannot tell what this rule touches" must not resolve to "let it run"."""
+        rules = self._install(frozenset({"241"}), existing_spec=None)
+
+        with self.assertRaises(AutomationsError):
+            server.set_rule_enabled("99", True)
+
+        self.assertEqual(rules.enabled, [])
+
     def test_disabling_is_never_refused(self):
         """Disabling only removes a rule's ability to act, so it needs no gate."""
         rules = self._install(frozenset({"241"}), existing_spec=_RULE)
@@ -334,16 +344,30 @@ class WritableAllowlistTests(unittest.TestCase):
 
 
 class SpecDepthTests(unittest.TestCase):
-    def test_a_deeply_nested_spec_is_refused_rather_than_crashing(self):
-        """The walk runs before the size check, so it needs its own bound."""
+    @staticmethod
+    def _deep_spec(levels: int) -> dict[str, Any]:
+        """Return a spec nested `levels` deep."""
         spec: dict[str, Any] = {"name": "deep"}
         cursor = spec
-        for _ in range(50):
+        for _ in range(levels):
             cursor["nested"] = {}
             cursor = cursor["nested"]
+        return spec
+
+    def test_a_deeply_nested_spec_is_refused_rather_than_crashing(self):
+        """The walk runs before the size check, so it needs its own bound."""
+        with self.assertRaises(AutomationsError):
+            collect_device_ids(self._deep_spec(50))
+
+    def test_a_spec_too_deep_to_serialize_is_refused_not_crashed(self):
+        """With no allowlist set the id walk never runs, so the size check must hold."""
+        httpd, port = _start_server(self)
+        client = AutomationsClient(_settings(port))
 
         with self.assertRaises(AutomationsError):
-            collect_device_ids(spec)
+            client.create_rule(self._deep_spec(sys.getrecursionlimit() * 2))
+
+        self.assertEqual(httpd.received, [])  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":

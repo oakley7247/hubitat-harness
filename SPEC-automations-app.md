@@ -26,8 +26,8 @@ or not Claude or the Mac is ever available again.
 - **Exposes seven MCP tools** on the existing server: `list_rules`, `get_rule`,
   `list_rule_devices`, `create_rule`, `update_rule`, `set_rule_enabled`, `delete_rule`.
 - **Shows every rule in the hub UI** with its trigger and actions in plain English, an
-  enable toggle, a last-fired timestamp, a fire count, a Run Now button, and the raw
-  spec in an editable text box.
+  enable toggle, a last-fired timestamp, a fire count, a Run Now button, the stored spec
+  displayed, and a separate box for pasting a replacement.
 
 ## What it deliberately does not do
 
@@ -58,7 +58,7 @@ or not Claude or the Mac is ever available again.
 | `apps/claude-automations.groovy` | Hub | Device pool, endpoints, validation, child lifecycle, kill switch |
 | `apps/claude-automation-rule.groovy` | Hub | One rule spec, its subscriptions, its execution engine |
 | `src/hubitat_claude/automations.py` | Mac | HTTP client for the parent app's endpoints |
-| Six new tools in `server.py` | Mac | The MCP surface Claude calls |
+| Seven new tools in `server.py` | Mac | The MCP surface Claude calls |
 
 ## Rule schema
 
@@ -136,8 +136,9 @@ swapped for another driver, long after the rule was written.
 - **Rule count cap** on the parent, default 50.
 - **Actions per rule cap**, default 20.
 - **Minimum re-fire interval per rule**, default 1 second, to bound a sensor that chatters.
-- **Cascade depth cap**, default 3 — one rule's action can trigger another rule's
-  subscription, and without a bound a pair of rules can drive each other indefinitely.
+- **Firing-rate trip**, 30 firings in 10 seconds — one rule's action can trigger another
+  rule's subscription, and without a bound a pair of rules drives each other indefinitely.
+  See "Changed during the build" for why this replaced a cascade-depth count.
 - **Global kill switch** on the parent page: one toggle stops every child from acting.
 
 ## Security surface
@@ -201,7 +202,7 @@ Second worst: the OAuth token leaks and a stranger writes rules over the device 
    Sean rotates on demand from the parent page, and this project's local-only claim in
    `README.md` needs rewording rather than quiet erosion. **Blocks shipping.**
 2. ~~**Does Claude get to delete and edit rules, or only create them?**~~ **Settled
-   2026-08-05: full lifecycle.** All six tools ship — create, read, update, enable/disable,
+   2026-08-05: full lifecycle.** All seven tools ship — create, read, list devices, update, enable/disable,
    delete — plus the parent's own append-only history of every change.
 3. ~~**Does `askClaude` ship as an action in v1?**~~ **Settled 2026-08-05: deferred.**
    It is not in the actions table. Adding it later changes nothing already built.
