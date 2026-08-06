@@ -3,23 +3,22 @@
 #
 # Part of: hubitat-claude MCP server. Called by: server.py. Calls: the hub over
 # plain HTTP on the local network (the Maker API serves HTTP and authenticates
-# by query-string token; it offers no header auth and no trusted certificate).
-# Security: redirects are refused so the token cannot be forwarded to another
-# host; every path segment is validated against a strict pattern before it is
-# interpolated into a URL; response bodies are size-capped before parsing; and
-# no exception raised here contains the token or the full URL.
+# by query-string token; it offers no header auth and no trusted certificate),
+# through http_client.py.
+# Security: every path segment is validated against a strict pattern before it
+# is interpolated into a URL, and no exception raised here contains the token
+# or the full URL. The transport controls — no proxy, no redirect, bounded
+# reads, error bodies never parsed — live in http_client.py, which
+# automations.py shares.
 # =============================================================================
 """Call the Hubitat Maker API and return parsed, size-bounded JSON."""
 
-import json
 import re
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 
 from .config import HubitatConfig
+from .http_client import BoundedHttpClient, HttpAuthError, HttpError, HttpUnavailableError
 
 # --- Input patterns ----------------------------------------------------------
 
@@ -39,20 +38,6 @@ _ARGUMENT_PATTERN = re.compile(r"\A[ -~]{1,128}\Z")
 # does not prevent the split. One argument containing a comma would silently
 # become several arguments at the device.
 _ARGUMENT_FORBIDDEN = frozenset("/?#&%,")
-
-# --- Bounds ------------------------------------------------------------------
-
-# A hub with several hundred devices answers /devices in well under 1 MiB.
-# This cap bounds the bytes read from the socket, which in turn bounds the work
-# json.loads can be asked to do — the two layers that turn a hub response into
-# memory in this process. Above the cap the read is refused rather than
-# truncated, because a truncated JSON document parses as an error anyway.
-_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-
-# Read granularity. This is an upper bound per iteration, not a demand: the
-# loop uses read1, which returns whatever has arrived rather than waiting for
-# the full amount.
-_READ_CHUNK_BYTES = 64 * 1024
 
 
 class MakerApiError(Exception):
@@ -119,18 +104,6 @@ def validate_command_argument(argument: str) -> str:
     return argument
 
 
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Refuse every redirect instead of following it."""
-
-    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
-        """Return None so urllib raises rather than following the redirect."""
-        # SECURITY: the access token travels in the query string, so following
-        # a 3xx would re-send that credential to whatever host the Location
-        # header names. A machine-to-machine call to a known LAN address has no
-        # legitimate reason to redirect, so a 3xx is an error (ledger LL-14).
-        return None
-
-
 class MakerApiClient:
     """Talks to one Hubitat hub's Maker API over the local network."""
 
@@ -141,96 +114,7 @@ class MakerApiClient:
             config: Validated hub connection settings.
         """
         self._config = config
-        # SECURITY: the empty ProxyHandler suppresses urllib's default, which
-        # seeds itself from http_proxy/HTTP_PROXY/ALL_PROXY in the inherited
-        # environment. Without it, one environment variable would route the
-        # token-bearing URL to an arbitrary host in cleartext — bypassing the
-        # private-address check and the pinned literal entirely. A call to a
-        # known LAN address has no reason to traverse a proxy.
-        self._opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _NoRedirectHandler
-        )
-
-    def _read_bounded(self, response: Any, safe_path: str) -> bytes:
-        """Read a response body under both a size cap and a wall-clock deadline.
-
-        Args:
-            response: The open HTTP response.
-            safe_path: The token-free request path, for error messages.
-
-        Returns:
-            The body, up to one byte past the cap so an over-large body is
-            detectable rather than silently truncated into invalid JSON.
-
-        Raises:
-            MakerApiUnavailableError: The hub was still sending after the
-                timeout had elapsed across the whole read.
-        """
-        # SECURITY: the socket timeout applies per read *operation*, and it
-        # resets on every byte received. A between-reads deadline check alone
-        # is therefore not a bound: `read(n)` blocks until n bytes arrive, so a
-        # peer trickling one byte just inside each window keeps a single call
-        # blocked far past the deadline, which is never re-evaluated. Two
-        # things make the bound real. The socket's own timeout is tightened to
-        # whatever budget is left before each read, so a stalled read raises
-        # rather than waiting; and the chunk is small, which caps how much a
-        # single blocking call can be asked to wait for if the socket cannot be
-        # reached to tighten.
-        # SECURITY: read1 rather than read. `read(n)` blocks until it has all n
-        # bytes, so a peer dribbling data stays inside one call indefinitely and
-        # the loop's deadline check never runs — the bound would exist on paper
-        # and not in fact. read1 returns as soon as any data is available, which
-        # is what lets the check below actually fire. Falling back to read keeps
-        # a response object that lacks read1 working, at the cost of the
-        # tightened socket timeout being the only bound.
-        read = getattr(response, "read1", None) or response.read
-
-        deadline = time.monotonic() + self._config.timeout_seconds
-        remaining = _MAX_RESPONSE_BYTES + 1
-        chunks: list[bytes] = []
-        while remaining > 0:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise MakerApiUnavailableError(
-                    f"The hub was still sending a response for /{safe_path} after "
-                    f"{self._config.timeout_seconds} seconds."
-                )
-            self._tighten_socket_timeout(response, left)
-            try:
-                chunk = read(min(_READ_CHUNK_BYTES, remaining))
-            except TimeoutError as error:
-                raise MakerApiUnavailableError(
-                    f"The hub stalled partway through its response for /{safe_path}."
-                ) from error
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
-
-    @staticmethod
-    def _tighten_socket_timeout(response: Any, seconds: float) -> None:
-        """Lower the underlying socket's timeout to the time budget left.
-
-        Args:
-            response: The open HTTP response.
-            seconds: Remaining budget; the socket will not wait longer.
-        """
-        # NOTE: urllib exposes no public way to adjust the timeout mid-response,
-        # so this reaches through http.client's buffered reader to the socket.
-        # It is best effort by design — the private chain can be absent on a
-        # wrapped or mocked response, and the small chunk size above is what
-        # keeps the bound meaningful when that happens.
-        sock = getattr(getattr(response, "fp", None), "raw", None)
-        sock = getattr(sock, "_sock", None)
-        if sock is None:
-            return
-        try:
-            sock.settimeout(max(0.05, seconds))
-        except OSError:
-            # A closed or detached socket needs no timeout; the read that
-            # follows will fail on its own and be reported by the caller.
-            return
+        self._http = BoundedHttpClient(config.timeout_seconds)
 
     def _request(self, *segments: str) -> Any:
         """Perform one Maker API GET and return the parsed JSON body.
@@ -270,47 +154,20 @@ class MakerApiClient:
         safe_path = "/".join(segments)
 
         try:
-            with self._opener.open(url, timeout=self._config.timeout_seconds) as response:
-                raw = self._read_bounded(response, safe_path)
-                status = response.status
-        except urllib.error.HTTPError as error:
-            if error.code in (401, 403):
-                raise MakerApiAuthError(
-                    "The hub rejected the Maker API token or app id. Re-check "
-                    "HUBITAT_MAKER_APP_ID and HUBITAT_MAKER_TOKEN against the "
-                    "Maker API app on the hub."
-                ) from error
-            if error.code in (301, 302, 303, 307, 308):
-                raise MakerApiUnavailableError(
-                    f"The hub redirected the request for /{safe_path}. Refused: "
-                    "following it would send the access token to another host."
-                ) from error
-            raise MakerApiError(f"The hub returned HTTP {error.code} for /{safe_path}.") from error
-        except urllib.error.URLError as error:
-            raise MakerApiUnavailableError(
-                f"Could not reach the hub at {self._config.host_ip}: {error.reason}"
+            status, payload = self._http.request_json(url, safe_label=safe_path)
+        except HttpAuthError as error:
+            raise MakerApiAuthError(
+                "The hub rejected the Maker API token or app id. Re-check "
+                "HUBITAT_MAKER_APP_ID and HUBITAT_MAKER_TOKEN against the "
+                "Maker API app on the hub."
             ) from error
-        except TimeoutError as error:
-            raise MakerApiUnavailableError(
-                f"The hub did not answer within {self._config.timeout_seconds} seconds."
-            ) from error
+        except HttpUnavailableError as error:
+            raise MakerApiUnavailableError(str(error)) from error
+        except HttpError as error:
+            raise MakerApiError(str(error)) from error
 
-        if len(raw) > _MAX_RESPONSE_BYTES:
-            raise MakerApiError(
-                f"The hub's response to /{safe_path} exceeded "
-                f"{_MAX_RESPONSE_BYTES} bytes and was refused."
-            )
         if status != 200:
             raise MakerApiError(f"The hub returned HTTP {status} for /{safe_path}.")
-
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
-            raise MakerApiUnavailableError(
-                f"The hub's response to /{safe_path} was not valid JSON. This "
-                "usually means the app id belongs to something other than a "
-                "Maker API instance."
-            ) from error
 
         # NOTE: the Maker API can report failure as HTTP 200 with a truthy
         # `error` key, so the status check above is not sufficient on its own.

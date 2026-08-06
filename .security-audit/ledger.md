@@ -6,6 +6,26 @@ Format: one section per audit, newest first. Every finding is listed with its ou
 
 ---
 
+## Audit 5 — uncommitted · 2026-08-05 · verdict BLOCK
+
+First audit of the automations component: two Hubitat apps, a shared HTTP transport extracted from `maker_api.py`, a rules client, and seven MCP tools. The extraction was verified line by line as control-preserving. The blocking finding is a class this project had not met before — output encoding.
+
+| ID | Severity | Finding | Outcome |
+|---|---|---|---|
+| A5-CRIT-1 | Critical | Model-supplied rule names and device labels reached the hub's admin page through `paragraph`, which Hubitat renders as HTML — on an origin that has no login by default, so an injected label was script with rights to install Groovy and read both tokens | **Fixed** before commit. Every interpolation in both apps goes through a `safe()` escaper at the sink; rule names additionally refuse markup characters, so the durable artifact cannot carry them either. |
+| A5-HIGH-1 | High | Hubitat publishes an internet-reachable cloud URL for any OAuth app; the `Host`-header check in front of it is unverifiable without a hub, and is a no-op if the relay rewrites the header | **Open.** Cannot be closed from the repository. Named in `SPEC-automations-app.md` open question 1 as blocking installation, and stated plainly in `README.md` rather than described as closed. |
+| A5-MED-1 | Medium | `_refuse_unwritable_devices` walked for `deviceId` keys, so a `setMode` action — which carries none — passed the allowlist; and `set_rule_enabled` ran no spec check at all. Reopened the class `A2-MED-1` closed, through a path that did not exist then | **Fixed** before commit. `setMode` is refused while the allowlist is in force, and enabling re-checks the rule's stored spec. Both covered by tests. |
+| A5-MED-2 | Medium | The rule history stored only a timestamp, a verb, and a name — so the spec's named control against a rule written under injection did not exist | **Fixed** before commit. Each entry carries the submitted spec, capped, and the page shows the 30-day window the spec called for. |
+| A5-MED-3 | Medium | The rate trip was charged before conditions were evaluated, so three ordinary rules on a chatty sensor could stop every rule on the hub with no fault present | **Fixed** before commit. The charge moved to immediately before the actions run. Inverted the same ordering `A3-LOW-1` established. |
+| A5-LOW-1 | Low | `Run now` checked neither the enable toggle nor the master switch, so the kill switch was not one | **Fixed** before commit. |
+| A5-LOW-2 | Low | The per-rule re-fire interval read `state` and wrote it late, repeating `A4-LOW-1`'s shape in new code | **Fixed** before commit. Moved to `atomicState` and claimed on entry. |
+| A5-LOW-3 | Low | A throwing action abandoned every later action silently, and a throwing `configureRule` left a persisted child after an error response that said nothing was created | **Fixed** before commit. Per-action isolation with a recorded note; failed creation rolls the child back. |
+| A5-LOW-4 | Low | The spec size cap lived only on the Mac, and unknown keys were accepted, persisted, and returned to the model as unvalidated text | **Fixed** before commit. The hub caps size itself and refuses keys the schema does not define, at every level. |
+| A5-LOW-5 | Low | The local-only refusal answered 403, which the client never reads a body for — so a Host mismatch reached the operator as "bad token" | **Fixed** before commit. The refusal answers 409. |
+| A5-INF-2 | Info | A comment claimed the token is shown once; the page redisplays it every view | Fixed before commit. |
+| A5-INF-3 | Info | `SPEC-automations-app.md` said six tools; seven ship | Fixed before commit. |
+| A5-INF-4 | Info | `collect_device_ids` recursed unbounded, ahead of the size check, so a nested spec raised `RecursionError` rather than a refusal | Fixed before commit. Depth bound, with a test. |
+
 ## Audit 4 — `514759b` · 2026-08-03 · verdict PASS
 
 Focused re-audit of the `ea364b7..514759b` delta.
@@ -61,11 +81,15 @@ First audit of this repository.
 
 ## Standing notes
 
-**Every remediation round in this project introduced a defect of its own.** Round 1 created two Mediums, round 2 created one Low, round 3 created one Low. In each case the new defect was in code that did not exist before the fix, and in each case a scanner found none of them. Treat the changed code as the highest-yield place to look, not the lowest.
+**Every remediation round in this project introduced a defect of its own.** Round 1 created two Mediums, round 2 created one Low, round 3 created one Low, and the automations build created three of its own findings. In each case the new defect was in code that did not exist before the fix, and in each case a scanner found none of them. Treat the changed code as the highest-yield place to look, not the lowest.
+
+**Untrusted text reaching a Hubitat page is an HTML sink.** `paragraph` renders markup by design, and Hub Login Security is off by default, so the admin origin runs unauthenticated. Anything model-supplied or device-supplied must be escaped at the point of rendering, never at the point of storage — `A5-CRIT-1` was the project's first output-encoding defect and it was the worst finding in five audits. Every new page sink is a repeat until proven otherwise.
+
+**A control's promise has to be re-checked against every path, not the path it was written for.** `A2-MED-1` and `A5-MED-1` are the same defect eighteen months apart in project time: a device allowlist that covered the write path in front of it and missed the one added later. When a new write path ships, enumerate the existing guards and ask which of them it walks past.
 
 **The Groovy driver has no automated coverage.** No test harness exists for it, and no static analyser available here ships Groovy rules — semgrep walks the file without analysing it. Four of the findings above live in that file. Its review is entirely manual, every time.
 
 **Two facts about the deployment cannot be settled from this repository**, and both are named at the findings they affect: whether Hubitat serialises command invocations per device, and whether the hub exposes any door, gate, or garage opener as a plain switch. The second is what `HUBITAT_WRITABLE_DEVICE_IDS` exists for.
 
 ---
-**Last updated:** 2026-08-03 · after audit 4
+**Last updated:** 2026-08-05 · after audit 5

@@ -65,6 +65,10 @@ class HubitatConfig:
         writable_device_ids: The only devices that may be commanded, or None
             when the operator has not narrowed it. None is the default and
             means every device that passes the guarded-device check.
+        automations_app_id: The Claude Automations app's installed-app id, or
+            None when the rules app is not installed. Optional: the rest of
+            the server works without it.
+        automations_token: That app's OAuth access token. Never log this.
     """
 
     host_ip: str
@@ -74,6 +78,11 @@ class HubitatConfig:
     timeout_seconds: float
     allow_security_commands: bool
     writable_device_ids: frozenset[str] | None
+    # Default to absent: the rules app is optional, and every caller that does
+    # not install it should get a config that says so rather than having to
+    # name the fields.
+    automations_app_id: str | None = None
+    automations_token: str | None = None
 
 
 def _require_env(name: str) -> str:
@@ -284,6 +293,43 @@ def _load_flag(name: str) -> bool:
     )
 
 
+def _load_automations() -> tuple[str | None, str | None]:
+    """Return the rules app's id and token, or (None, None) when it is absent.
+
+    Returns:
+        The validated app id and token, or a pair of Nones.
+
+    Raises:
+        ConfigError: One of the two is set without the other, or either is
+            malformed. A half-configured rules app is refused rather than
+            silently left off, because the operator clearly intended it on.
+    """
+    app_id = os.environ.get("HUBITAT_AUTOMATIONS_APP_ID", "").strip()
+    token = os.environ.get("HUBITAT_AUTOMATIONS_TOKEN", "").strip()
+    if not app_id and not token:
+        return None, None
+    if not app_id or not token:
+        missing = "HUBITAT_AUTOMATIONS_APP_ID" if not app_id else "HUBITAT_AUTOMATIONS_TOKEN"
+        raise ConfigError(
+            f"{missing} is not set, but the other half of the rules app "
+            "configuration is. Set both, or neither to turn the rule tools off."
+        )
+    if not _APP_ID_PATTERN.match(app_id):
+        raise ConfigError(
+            f"HUBITAT_AUTOMATIONS_APP_ID must be digits only, got {app_id!r}. "
+            "Find it on the Claude Automations app's page on the hub."
+        )
+    if not _TOKEN_PATTERN.match(token):
+        # NOTE: the token is deliberately absent from this message — config
+        # errors are printed and often pasted into chats and issues.
+        raise ConfigError(
+            "HUBITAT_AUTOMATIONS_TOKEN does not look like a Hubitat OAuth token "
+            "(expected 8-64 hex characters and dashes). Value withheld from "
+            "this message; re-copy it from the app's page on the hub."
+        )
+    return app_id, token
+
+
 def load_config() -> HubitatConfig:
     """Build a validated HubitatConfig from the process environment.
 
@@ -312,6 +358,8 @@ def load_config() -> HubitatConfig:
             "this message; re-copy it from the Maker API app on the hub."
         )
 
+    automations_app_id, automations_token = _load_automations()
+
     return HubitatConfig(
         host_ip=_resolve_private_ip(host),
         port=_load_port(),
@@ -320,4 +368,6 @@ def load_config() -> HubitatConfig:
         timeout_seconds=_load_timeout(),
         allow_security_commands=_load_flag("HUBITAT_ALLOW_SECURITY_COMMANDS"),
         writable_device_ids=_load_writable_device_ids(),
+        automations_app_id=automations_app_id,
+        automations_token=automations_token,
     )

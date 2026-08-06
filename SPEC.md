@@ -1,5 +1,9 @@
 # SPEC — hubitat-claude
 
+Covers the two shipped components: the MCP server and the Claude Assistant driver. A
+third — a Hubitat app that lets Claude write automation rules onto the hub — is specified
+separately in `SPEC-automations-app.md` and is not yet approved.
+
 ## Goal
 
 Let Sean control and query his Hubitat Elevation hub from Claude, and let the hub call Claude for AI-generated text inside its own automations.
