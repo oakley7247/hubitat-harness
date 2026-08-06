@@ -2,7 +2,7 @@
 
 Connects a Hubitat Elevation hub to Claude, in both directions. An (MCP) Model Context Protocol server lets you ask Claude to check sensors and control devices; a Groovy driver lets hub automations ask Claude a question and act on the answer.
 
-Everything stays on your local network. The server refuses any hub address that is not private, and never uses Hubitat's cloud relay.
+Everything stays on your local network. The server refuses any hub address that is not private, and never uses Hubitat's cloud relay. The optional automations app is the one qualifier: Hubitat publishes a cloud URL for it whether or not you use one, and the app refuses requests arriving that way — see that section below.
 
 ## Install
 
@@ -110,7 +110,7 @@ Hubitat refuses to store an attribute longer than 1024 characters, so replies ar
 
 `apps/claude-automations.groovy` and `apps/claude-automation-rule.groovy` let Claude write automation rules onto the hub. Rules run on the hub itself, unattended, whether or not this server is running.
 
-**This is untested against a real hub.** The code is complete and the Python side is covered by tests, but nothing here has been installed on hardware yet. Install it expecting to find problems.
+**Partly proven on hardware.** Installed and verified on a real hub on 2026-08-05: the endpoints answer, the device pool reads back with attributes and commands, and the local-only check turns away a cloud request. The rule engine itself — triggers firing, conditions evaluating, actions running — has not yet been exercised on hardware. Expect to find problems there.
 
 To install it:
 
