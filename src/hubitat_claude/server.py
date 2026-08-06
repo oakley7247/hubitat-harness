@@ -22,6 +22,7 @@ from typing import Any
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
+from .automations import AutomationsClient, AutomationsError, collect_device_ids
 from .config import ConfigError, HubitatConfig, load_config
 from .maker_api import MakerApiClient, MakerApiError
 
@@ -100,6 +101,9 @@ mcp: MCPServer = MCPServer(
 
 _client: MakerApiClient | None = None
 _config: HubitatConfig | None = None
+# Built on first use rather than at startup, so a hub without the rules app
+# installed starts and serves the device tools normally.
+_automations: AutomationsClient | None = None
 
 
 def _hub() -> MakerApiClient:
@@ -437,6 +441,247 @@ def set_mode(mode_id: str) -> dict[str, Any]:
             "another route."
         )
     return _wrap(_hub().set_mode(mode_id))
+
+
+def _rules() -> AutomationsClient:
+    """Return the rules-app client, building it on first use.
+
+    Returns:
+        The client for the hub's Claude Automations app.
+
+    Raises:
+        AutomationsNotConfiguredError: The rules app is not configured, which
+            is an operator choice rather than a fault — the rest of the server
+            works without it.
+    """
+    global _automations
+    if _automations is None:
+        _automations = AutomationsClient(_settings())
+    return _automations
+
+
+def _refuse_unwritable_devices(spec: dict[str, Any]) -> None:
+    """Hold a rule spec to the operator's writable-device list.
+
+    Args:
+        spec: The rule spec being created or updated.
+
+    Raises:
+        AutomationsError: The spec names a device outside the list.
+    """
+    # SECURITY: a rule is a write path, so the allowlist has to cover it — the
+    # same reasoning that refuses set_mode while the list is in force. The hub's
+    # device pool is the stronger fence and is enforced there; this one keeps
+    # the setting's promise ("only these devices") true of every path on this
+    # side, including one added after the operator wrote the list.
+    writable = _settings().writable_device_ids
+    if writable is None:
+        return
+    named = collect_device_ids(spec)
+    outside = sorted(named - writable)
+    if outside:
+        raise AutomationsError(
+            f"Refused: this rule names device(s) {', '.join(outside)}, which are "
+            "not in HUBITAT_WRITABLE_DEVICE_IDS. The hub owner set that list as "
+            "the devices this server may command. Tell the user this rather "
+            "than trying another route."
+        )
+    # SECURITY: a setMode action carries no device id, so the walk above cannot
+    # see it — and on most hubs the mode drives Hubitat Safety Monitor, making
+    # "set mode to Home" a disarm. set_mode refuses outright while this list is
+    # in force, for exactly that reason; a rule is the same write on a delay, so
+    # it is refused on the same terms.
+    if _names_set_mode(spec):
+        raise AutomationsError(
+            "Refused: this rule changes the hub mode, which commonly arms or "
+            "disarms security automations. A mode is not a device and cannot "
+            "appear in HUBITAT_WRITABLE_DEVICE_IDS, so mode changes are off "
+            "while that setting is in force. Tell the user this rather than "
+            "trying another route."
+        )
+
+
+def _names_set_mode(spec: Any) -> bool:
+    """Report whether a rule spec carries a setMode action at any depth.
+
+    Args:
+        spec: A rule spec, or any part of one.
+
+    Returns:
+        True when a setMode action appears anywhere in it.
+    """
+    if isinstance(spec, dict):
+        if spec.get("type") == "setMode":
+            return True
+        return any(_names_set_mode(value) for value in spec.values())
+    if isinstance(spec, list):
+        return any(_names_set_mode(entry) for entry in spec)
+    return False
+
+
+@mcp.tool(
+    description=(
+        "List the automation rules on the hub, with whether each is enabled "
+        "and how often it has fired. Rules run on the hub itself, unattended."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False),
+)
+def list_rules() -> dict[str, Any]:
+    """Return every rule the hub's Claude Automations app holds.
+
+    Returns:
+        The rule list, wrapped with its provenance.
+    """
+    return _wrap(_rules().list_rules())
+
+
+@mcp.tool(
+    description=(
+        "Get one rule's full spec — its trigger, conditions, and actions. Use "
+        "this before update_rule, which replaces the whole spec."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False),
+)
+def get_rule(rule_id: str) -> dict[str, Any]:
+    """Return one rule and its spec.
+
+    Args:
+        rule_id: The rule's id, as shown by list_rules.
+
+    Returns:
+        The rule detail, wrapped with its provenance.
+    """
+    return _wrap(_rules().get_rule(rule_id))
+
+
+@mcp.tool(
+    description=(
+        "List the devices rules may use, with the attributes and commands each "
+        "one reports and whether it guards a boundary. Call this before "
+        "writing a rule: a rule naming anything outside this pool is refused."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False),
+)
+def list_rule_devices() -> dict[str, Any]:
+    """Return the rule device pool and the hub's mode names.
+
+    Returns:
+        The pool, wrapped with its provenance.
+    """
+    return _wrap(_rules().list_pool())
+
+
+@mcp.tool(
+    description=(
+        "Create an automation rule on the hub from a JSON spec with 'name', "
+        "'trigger', optional 'conditions', and 'actions'. The rule then runs "
+        "unattended, without further approval, until it is disabled or "
+        "deleted. Call list_rule_devices first — every device id, attribute, "
+        "command, and mode name is checked against what the hub reports, and a "
+        "rule that fails any check is refused whole with the reasons."
+    ),
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False),
+)
+def create_rule(spec: dict[str, Any]) -> dict[str, Any]:
+    """Create one rule on the hub.
+
+    Args:
+        spec: The rule spec.
+
+    Returns:
+        The created rule's id and name, wrapped with its provenance.
+
+    Raises:
+        AutomationsError: The spec names a device outside the writable list,
+            or the hub refused it.
+    """
+    _refuse_unwritable_devices(spec)
+    return _wrap(
+        _rules().create_rule(spec),
+        note=(
+            "This rule now fires on its own, with no approval prompt. It is "
+            "visible on the hub under Apps, where it can be disabled or removed."
+        ),
+    )
+
+
+@mcp.tool(
+    description=(
+        "Replace one rule's spec. The spec must be complete — this is not a "
+        "partial edit. Call get_rule first to see what the rule holds now."
+    ),
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True),
+)
+def update_rule(rule_id: str, spec: dict[str, Any]) -> dict[str, Any]:
+    """Replace one rule's spec.
+
+    Args:
+        rule_id: The rule's id.
+        spec: The complete replacement spec.
+
+    Returns:
+        The rule's id and name, wrapped with its provenance.
+
+    Raises:
+        AutomationsError: The spec names a device outside the writable list,
+            or the hub refused it.
+    """
+    _refuse_unwritable_devices(spec)
+    return _wrap(_rules().update_rule(rule_id, spec))
+
+
+@mcp.tool(
+    description=(
+        "Enable or disable one rule without deleting it. A disabled rule keeps "
+        "its spec and its history and stops acting immediately."
+    ),
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
+)
+def set_rule_enabled(rule_id: str, enabled: bool) -> dict[str, Any]:
+    """Turn one rule on or off.
+
+    Args:
+        rule_id: The rule's id.
+        enabled: Whether the rule should act.
+
+    Returns:
+        The rule's new state, wrapped with its provenance.
+
+    Raises:
+        AutomationsError: Enabling would start a rule naming a device outside
+            the writable list.
+    """
+    # SECURITY: enabling is a write, so it is gated on the rule's own spec —
+    # not only creation. A rule can predate the operator writing the allowlist,
+    # or have been edited by hand on the hub's own page, so the spec is fetched
+    # and checked now rather than trusted from whenever it was last validated.
+    # Disabling needs no check: it only ever removes a rule's ability to act.
+    if enabled and _settings().writable_device_ids is not None:
+        existing = _rules().get_rule(rule_id)
+        if isinstance(existing, dict):
+            spec = existing.get("spec")
+            if isinstance(spec, dict):
+                _refuse_unwritable_devices(spec)
+    return _wrap(_rules().set_rule_enabled(rule_id, enabled))
+
+
+@mcp.tool(
+    description=(
+        "Delete one rule and everything it had scheduled. This cannot be "
+        "undone; set_rule_enabled(false) is the reversible option."
+    ),
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True),
+)
+def delete_rule(rule_id: str) -> dict[str, Any]:
+    """Delete one rule.
+
+    Args:
+        rule_id: The rule's id.
+
+    Returns:
+        Confirmation of the deletion, wrapped with its provenance.
+    """
+    return _wrap(_rules().delete_rule(rule_id))
 
 
 def main() -> None:

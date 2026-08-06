@@ -106,6 +106,37 @@ The device also refuses a second question while one is still in flight, rather t
 
 Hubitat refuses to store an attribute longer than 1024 characters, so replies are capped — 500 characters by default — and the system prompt asks Claude to answer briefly.
 
+## The Claude Automations app
+
+`apps/claude-automations.groovy` and `apps/claude-automation-rule.groovy` let Claude write automation rules onto the hub. Rules run on the hub itself, unattended, whether or not this server is running.
+
+**This is untested against a real hub.** The code is complete and the Python side is covered by tests, but nothing here has been installed on hardware yet. Install it expecting to find problems.
+
+To install it:
+
+1. On the hub, open **Developer Tools → Apps Code → New App**, paste `claude-automations.groovy`, and **Save**. Then **OAuth → Enable OAuth in App**.
+2. Repeat for `claude-automation-rule.groovy`. It needs no OAuth — it is only ever a child.
+3. Open **Apps → Add User App**, choose **Claude Automations**, and pick the devices Claude may use.
+4. Copy the app id and token from that page into `.env` as `HUBITAT_AUTOMATIONS_APP_ID` and `HUBITAT_AUTOMATIONS_TOKEN`, then restart the server.
+
+Then ask Claude for an automation in plain language. It calls `list_rule_devices` to see what the pool holds, writes a rule spec, and `create_rule` submits it. The hub checks every device id, attribute, command, and mode name against what it actually reports, and refuses the whole rule with reasons if anything is wrong.
+
+Each rule appears on the hub under **Apps**, indented beneath Claude Automations, with its own page: the rule in plain English, an enable toggle, a fire count, a **Run now** button, and the raw spec in an editable box. Deleting a rule is deleting an app.
+
+### What bounds it
+
+**The device pool is the fence, and the hub enforces it.** A Hubitat app can only command devices selected in its preferences. Claude cannot add to that list, and no endpoint exposes a way to.
+
+**Boundary devices are off by default.** Locks, doors, garage doors, valves, keypads, alarms, and hub mode changes are refused — checked when a rule is created and again every time it fires, because a device can leave the pool or be swapped for another driver long after a rule was written. The override is a toggle on the app's page, deliberately not an environment variable: a rule that unlocks a door unattended should cost physical access to the hub.
+
+**A firing-rate trip stops runaway rules.** More than 30 firings in 10 seconds means rules are triggering each other, so every rule stops until you clear it by hand on the app's page.
+
+**Claude never writes Groovy.** It submits JSON, which the app reads with a switch statement. Nothing from the model is evaluated as code.
+
+### One thing to know before you rely on it
+
+Hubitat publishes a **cloud URL** for any OAuth app, reachable from the internet by anyone holding the token — whether or not you use it. The app refuses requests whose `Host` header is not the hub's own address, which should block that path, but **this defence is unverified**. Turn on debug logging, make one call, and check the logged `Host` value before treating the cloud URL as closed. The app's page has a **Rotate token** button if you need it.
+
 ## Development
 
 ```bash
