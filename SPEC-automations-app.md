@@ -160,9 +160,10 @@ and is subject to the same rules — never logged, never in an error message, ne
 redirect.
 
 **A cloud URL that exists whether or not it is used.** Hubitat mints both a local and a
-cloud endpoint for any OAuth app. The cloud one is reachable from the internet by anyone
-holding the token, which contradicts this project's local-only stance. Resolving this is
-an open question below, and it blocks shipping.
+cloud endpoint for any OAuth app, and the cloud one is reachable from the internet by
+anyone holding the token. The app refuses it by comparing the `Host` header against the
+hub's own address, and that refusal was verified against real hardware on 2026-08-05.
+The path is guarded, not absent: turning `refuseCloudRequests` off opens it.
 
 **A durable prompt-injection target.** Device labels are attacker-controlled text that
 reaches Claude's context. Today the worst outcome is one bad command that Sean sees in an
@@ -183,7 +184,7 @@ Second worst: the OAuth token leaks and a stranger writes rules over the device 
 - [ ] A rule commanding a boundary device is refused at creation and at fire time, both proven by tests.
 - [ ] Disabling a rule in the hub UI stops it firing; the kill switch stops all of them.
 - [ ] Neither token appears in a log, an error message, or a redirect.
-- [ ] The cloud endpoint question below is resolved and the resolution is implemented.
+- [x] The cloud endpoint question below is resolved and the resolution is implemented.
 - [ ] Tests green, lint clean, types clean, security preflight passed, independent audit verdict of PASS.
 
 ## Needs from Sean
@@ -196,11 +197,11 @@ Second worst: the OAuth token leaks and a stranger writes rules over the device 
 
 ## Open questions
 
-1. **Can the app refuse cloud-endpoint requests?** Hubitat creates a cloud URL for every
-   OAuth app. If a `mappings` handler can reliably distinguish a local caller from a
-   cloud one, refuse the cloud path outright. If it cannot, the fallback is a token that
-   Sean rotates on demand from the parent page, and this project's local-only claim in
-   `README.md` needs rewording rather than quiet erosion. **Blocks shipping.**
+1. ~~**Can the app refuse cloud-endpoint requests?**~~ **Settled 2026-08-05 on hardware:
+   yes.** A call to `/pool` over `cloud.hubitat.com` returned the app's own 409, so the
+   relay presents a `Host` the check rejects. The cloud path still reaches the app — the
+   check is what stops it — so `refuseCloudRequests` is load-bearing, and this should be
+   re-tested after a hub firmware update.
 2. ~~**Does Claude get to delete and edit rules, or only create them?**~~ **Settled
    2026-08-05: full lifecycle.** All seven tools ship — create, read, list devices, update, enable/disable,
    delete — plus the parent's own append-only history of every change.

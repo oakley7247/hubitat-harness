@@ -133,9 +133,13 @@ Each rule appears on the hub under **Apps**, indented beneath Claude Automations
 
 **Claude never writes Groovy.** It submits JSON, which the app reads with a switch statement. Nothing from the model is evaluated as code.
 
-### One thing to know before you rely on it
+### The cloud URL, and why one setting is load-bearing
 
-Hubitat publishes a **cloud URL** for any OAuth app, reachable from the internet by anyone holding the token — whether or not you use it. The app refuses requests whose `Host` header is not the hub's own address, which should block that path, but **this defence is unverified**. Turn on debug logging, make one call, and check the logged `Host` value before treating the cloud URL as closed. The app's page has a **Rotate token** button if you need it.
+Hubitat publishes a **cloud URL** for any OAuth app, reachable from the internet by anyone holding the token — whether or not you use it. The app refuses requests whose `Host` header is not the hub's own address.
+
+**That refusal was verified against a real hub on 2026-08-05:** a call over `cloud.hubitat.com` came back with the app's own 409, so Hubitat's relay presents a `Host` the check rejects.
+
+Read that precisely. The cloud path still reaches the app — the check is the only thing that turns it away. So **Refuse requests that did not arrive over the local network** is a security control, not a preference; leave it on. Re-run the test after a hub firmware update, since the relay's behaviour is Hubitat's to change. The app's page has a **Rotate token** button if the token ever travels somewhere it shouldn't.
 
 ## Development
 
