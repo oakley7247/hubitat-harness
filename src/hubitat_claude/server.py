@@ -25,6 +25,7 @@ from mcp.types import ToolAnnotations
 from .automations import AutomationsClient, AutomationsError, collect_device_ids
 from .config import ConfigError, HubitatConfig, load_config
 from .maker_api import MakerApiClient, MakerApiError
+from .rule_store import RuleStore, RuleStoreError
 
 # SECURITY: a device carrying any of these capabilities guards a physical
 # boundary or a safety function, so a mistaken or injected command against it
@@ -104,6 +105,7 @@ _config: HubitatConfig | None = None
 # Built on first use rather than at startup, so a hub without the rules app
 # installed starts and serves the device tools normally.
 _automations: AutomationsClient | None = None
+_store: RuleStore | None = None
 
 
 def _hub() -> MakerApiClient:
@@ -460,6 +462,70 @@ def _rules() -> AutomationsClient:
     return _automations
 
 
+def _rule_store() -> RuleStore | None:
+    """Return the local rule mirror, or None when the operator wants none.
+
+    Returns:
+        The store bound to HUBITAT_RULES_DIR, or None when that is unset.
+    """
+    global _store
+    directory = _settings().rules_dir
+    if directory is None:
+        return None
+    if _store is None:
+        _store = RuleStore(directory)
+    return _store
+
+
+def _mirror(rule_id: str) -> str | None:
+    """Refresh the local copy of one rule from the hub.
+
+    Args:
+        rule_id: The rule to re-read and write out.
+
+    Returns:
+        A note for the caller when the copy could not be updated, else None.
+    """
+    # NOTE: this never raises. The hub change has already happened and
+    # succeeded; a filesystem problem afterwards must not make it look
+    # otherwise, or the model retries a write that already took effect. The
+    # failure is reported alongside the success instead.
+    store = _rule_store()
+    if store is None:
+        return None
+    try:
+        fetched = _rules().get_rule(rule_id)
+        spec = fetched.get("spec") if isinstance(fetched, dict) else None
+        if not isinstance(spec, dict):
+            return (
+                "The rule changed on the hub, but its local copy was not "
+                f"updated: the hub returned no spec for rule {rule_id}."
+            )
+        store.write(rule_id, spec)
+    except (AutomationsError, RuleStoreError, OSError) as error:
+        return f"The rule changed on the hub, but its local copy was not updated: {error}"
+    return None
+
+
+def _unmirror(rule_id: str) -> str | None:
+    """Drop the local copy of one deleted rule.
+
+    Args:
+        rule_id: The rule whose file should go.
+
+    Returns:
+        A note for the caller when the copy could not be removed, else None.
+    """
+    store = _rule_store()
+    if store is None:
+        return None
+    try:
+        store.remove(rule_id)
+    except (RuleStoreError, OSError) as error:
+        return f"The rule was deleted on the hub, but its local copy remains: {error}"
+    return None
+
+
 def _refuse_unwritable_devices(spec: dict[str, Any]) -> None:
     """Hold a rule spec to the operator's writable-device list.
 
@@ -596,13 +662,14 @@ def create_rule(spec: dict[str, Any]) -> dict[str, Any]:
             or the hub refused it.
     """
     _refuse_unwritable_devices(spec)
-    return _wrap(
-        _rules().create_rule(spec),
-        note=(
-            "This rule now fires on its own, with no approval prompt. It is "
-            "visible on the hub under Apps, where it can be disabled or removed."
-        ),
+    created = _rules().create_rule(spec)
+    note = (
+        "This rule now fires on its own, with no approval prompt. It is "
+        "visible on the hub under Apps, where it can be disabled or removed."
     )
+    rule_id = created.get("ruleId") if isinstance(created, dict) else None
+    problem = _mirror(str(rule_id)) if rule_id else None
+    return _wrap(created, note=note if problem is None else f"{note} {problem}")
 
 
 @mcp.tool(
@@ -627,7 +694,9 @@ def update_rule(rule_id: str, spec: dict[str, Any]) -> dict[str, Any]:
             or the hub refused it.
     """
     _refuse_unwritable_devices(spec)
-    return _wrap(_rules().update_rule(rule_id, spec))
+    updated = _rules().update_rule(rule_id, spec)
+    problem = _mirror(rule_id)
+    return _wrap(updated) if problem is None else _wrap(updated, note=problem)
 
 
 @mcp.tool(
@@ -671,7 +740,10 @@ def set_rule_enabled(rule_id: str, enabled: bool) -> dict[str, Any]:
                 "Enable it from the rule's own page on the hub if you intend to."
             )
         _refuse_unwritable_devices(spec)
-    return _wrap(_rules().set_rule_enabled(rule_id, enabled))
+    changed = _rules().set_rule_enabled(rule_id, enabled)
+    # `enabled` lives in the spec, so a toggle changes the stored copy too.
+    problem = _mirror(rule_id)
+    return _wrap(changed) if problem is None else _wrap(changed, note=problem)
 
 
 @mcp.tool(
@@ -690,7 +762,60 @@ def delete_rule(rule_id: str) -> dict[str, Any]:
     Returns:
         Confirmation of the deletion, wrapped with its provenance.
     """
-    return _wrap(_rules().delete_rule(rule_id))
+    deleted = _rules().delete_rule(rule_id)
+    problem = _unmirror(rule_id)
+    return _wrap(deleted) if problem is None else _wrap(deleted, note=problem)
+
+
+@mcp.tool(
+    description=(
+        "Reconcile the local JSON copies of the hub's rules with the hub "
+        "itself: write every rule, and delete copies of rules the hub no "
+        "longer has. Rule changes made through this server update their copy "
+        "automatically; this catches changes made on the hub's own pages, "
+        "which this server never sees. Does nothing if the operator has not "
+        "set HUBITAT_RULES_DIR."
+    ),
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
+)
+def sync_rules() -> dict[str, Any]:
+    """Make the local rule copies match the hub exactly.
+
+    Returns:
+        Which files were written and which removed, wrapped with provenance.
+
+    Raises:
+        RuleStoreError: A file could not be written or removed. This tool is
+            the one place a filesystem failure is worth reporting as a failure,
+            because writing the files is all it does.
+    """
+    store = _rule_store()
+    if store is None:
+        return _wrap(
+            None,
+            note=(
+                "No local copies are kept. Set HUBITAT_RULES_DIR in .env and "
+                "restart this server to turn them on."
+            ),
+        )
+
+    listing = _rules().list_rules()
+    rules = listing.get("rules") if isinstance(listing, dict) else None
+    if not isinstance(rules, list):
+        raise AutomationsError("The hub did not return a readable rule list.")
+
+    specs: dict[str, dict[str, Any]] = {}
+    for entry in rules:
+        if not isinstance(entry, dict) or not entry.get("ruleId"):
+            continue
+        rule_id = str(entry["ruleId"])
+        fetched = _rules().get_rule(rule_id)
+        spec = fetched.get("spec") if isinstance(fetched, dict) else None
+        if isinstance(spec, dict):
+            specs[rule_id] = spec
+
+    result = store.sync(specs)
+    return _wrap(result, directory=str(store.directory))
 
 
 def main() -> None:

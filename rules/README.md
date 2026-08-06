@@ -26,4 +26,8 @@ The hub assigns a new rule id on restore, so rename the file afterward to match.
 
 ## Keeping them current
 
-They are a snapshot, taken by hand. Nothing syncs them. After changing a rule — through Claude, or on the rule's own page — ask Claude to refresh the copy, or the file becomes a record of something that no longer exists.
+Set `HUBITAT_RULES_DIR` in `.env` to this folder's absolute path and the server maintains them itself: every rule created, updated, enabled, disabled, or deleted through Claude rewrites or removes its file immediately. Leave the variable unset and the server never writes to disk.
+
+That covers changes this server makes. It cannot see a rule you edit on its own page on the hub, or disable with the toggle there — those never reach the Mac. Ask Claude to **sync rules** after any hub-side change, or periodically; that pulls every rule, rewrites all the files, and deletes copies of rules the hub no longer has.
+
+A write that fails never fails the rule change itself. The hub is the authority; if a copy cannot be written, the tool still reports the rule change as the success it was and says the copy is stale.
