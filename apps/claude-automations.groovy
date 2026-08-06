@@ -99,11 +99,20 @@ preferences {
 // without going through it, so the bound has to exist on this side as well.
 @Field static final Integer MAX_SPEC_CHARS = 16384
 
-// SECURITY: characters refused in a rule name. The page escapes everything it
-// renders, which is the actual fix for markup reaching the admin UI — this
-// keeps markup out of the durable artifact as well, so a future sink that
-// forgets to escape has nothing to render.
+// SECURITY: characters refused in a rule name. Stricter than the set below
+// because a name has no reason to carry punctuation of any kind.
 @Field static final String NAME_FORBIDDEN = "<>&\"'`"
+
+// SECURITY: characters refused in EVERY string a spec persists, at any depth —
+// notification text, command arguments, comparison values, and any field a
+// later schema adds. Without a tag character there is no element to open, so a
+// stored spec cannot carry markup into a page whatever that page later does
+// with it. This is the belt to the escaping's braces: the pages escape at the
+// sink, and this keeps the durable artifact clean so a sink added later, or one
+// that trusts the platform to escape for it, has nothing to render. Kept to the
+// tag characters alone so ordinary text — an apostrophe, an ampersand — still
+// works in a notification.
+@Field static final String MARKUP_FORBIDDEN = "<>"
 
 // Every key the rule schema defines. Anything else is refused rather than
 // stored: an unknown key survives into state, back out through GET /rules/:id,
@@ -468,7 +477,27 @@ Map apiUpdateRule() {
     List<String> errors = validateSpec(spec)
     if (errors) return respond([error: "The rule was refused.", problems: errors], 400)
 
-    child.configureRule(spec)
+    // The same rollback the create path got. configureRule assigns the new
+    // spec on its first line and then rebuilds schedules, so a trigger the hub
+    // itself rejects — a cron string that satisfies the character check but not
+    // the Quartz parser — would otherwise persist the new spec, lose the
+    // schedules, skip the audit entry, and return a 500 saying nothing changed.
+    Map previous = child.getSpec()
+    try {
+        child.configureRule(spec)
+    } catch (Exception e) {
+        try {
+            child.configureRule(previous)
+        } catch (Exception restoreFailure) {
+            // Restoring failed too, so the rule is now inert rather than
+            // wrong. Say so loudly; it needs a person.
+            log.error "Claude Automations: '${child.getLabel()}' could not be restored " +
+                      "after a failed update — ${restoreFailure.message}. Review it by hand."
+        }
+        resubscribeAll()
+        log.warn "Claude Automations: update of '${spec.name}' rolled back — ${e.message}"
+        return respond([error: "The rule was refused.", problems: ["The hub could not apply it: ${e.message}"]], 400)
+    }
     resubscribeAll()
     recordAudit("changed", spec.name as String, spec)
     log.info "Claude Automations: updated rule '${spec.name}'"
@@ -587,6 +616,7 @@ List<String> validateSpec(Map spec) {
         return ["The rule is ${size} characters; the limit is ${MAX_SPEC_CHARS}."]
     }
     problems.addAll(unknownKeys(spec, RULE_KEYS, "the rule"))
+    problems.addAll(markupInStrings(spec, "the rule"))
 
     String name = spec.name as String
     if (!name || name.trim().isEmpty()) {
@@ -815,7 +845,7 @@ private List<String> checkCommand(Map action, int index) {
             problems.add("actions[${index}] commands ${dev.displayName}, which guards a physical " +
                          "or safety boundary. Turn on boundary devices on the app's page to allow it.")
         }
-        if (command && GUARDED_COMMANDS.contains(command.toLowerCase())) {
+        if (command && GUARDED_COMMANDS.contains(command.toLowerCase(Locale.ROOT))) {
             problems.add("actions[${index}].command ${command} opens, closes, locks, unlocks, or " +
                          "arms something. Turn on boundary devices on the app's page to allow it.")
         }
@@ -836,6 +866,33 @@ private List<String> checkCommand(Map action, int index) {
                 }
             }
         }
+    }
+    return problems
+}
+
+/**
+ * Refuse tag characters anywhere in a spec's strings.
+ *
+ * @param value The spec, or any part of one.
+ * @param label What to call this object in the message.
+ * @return A problem naming the offending text, or an empty list.
+ */
+private List<String> markupInStrings(Object value, String label) {
+    // The walk is over every nested value rather than the fields the schema
+    // names today, for the same reason the id walk on the Mac side is: a field
+    // added later must not be able to carry markup past a check that was only
+    // ever taught about its siblings.
+    if (value instanceof String) {
+        if (MARKUP_FORBIDDEN.any { value.contains(it) }) {
+            return ["${label} contains a < or > character, which is refused in a rule."]
+        }
+        return []
+    }
+    List<String> problems = []
+    if (value instanceof Map) {
+        value.each { key, entry -> problems.addAll(markupInStrings(entry, "${label}.${key}")) }
+    } else if (value instanceof List) {
+        value.eachWithIndex { entry, int index -> problems.addAll(markupInStrings(entry, "${label}[${index}]")) }
     }
     return problems
 }
@@ -948,7 +1005,11 @@ boolean boundaryDevicesAllowed() {
 
 /** @return true when the given command name crosses a boundary. */
 boolean isGuardedCommand(String command) {
-    return command != null && GUARDED_COMMANDS.contains(command.toLowerCase())
+    // SECURITY: Locale.ROOT, not the JVM default. Under a Turkish or
+    // Azerbaijani locale the default lowercases "SIREN" to "sıren" — a dotless
+    // ı that matches nothing in the list, so a boundary command would sail
+    // through a check that reads as though it caught it.
+    return command != null && GUARDED_COMMANDS.contains(command.toLowerCase(Locale.ROOT))
 }
 
 // --- Helpers -----------------------------------------------------------------
@@ -966,7 +1027,7 @@ private Object findChild(String ruleId) {
  * @param name The rule's name at the time.
  * @param spec The spec as submitted, or null for actions that carry none.
  */
-private void recordAudit(String action, String name, Map spec = null) {
+void recordAudit(String action, String name, Map spec = null) {
     List audit = (state.audit ?: []) as List
     // The spec is stored, not just the name. A rule written under a prompt
     // injection and then quietly updated would otherwise leave only "created"
