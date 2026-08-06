@@ -390,8 +390,9 @@ mappings {
 }
 
 /** @return The rule list, without any spec detail. */
-Map apiListRules() {
-    if (refuseRemote()) return
+Object apiListRules() {
+    Object refused = remoteRefusal()
+    if (refused != null) return refused
     List rules = getChildApps().collect { child ->
         [
             ruleId : child.id.toString(),
@@ -407,8 +408,9 @@ Map apiListRules() {
 }
 
 /** @return One rule with its full spec. */
-Map apiGetRule() {
-    if (refuseRemote()) return
+Object apiGetRule() {
+    Object refused = remoteRefusal()
+    if (refused != null) return refused
     def child = findChild(params.ruleId)
     if (!child) return respond([error: "No rule with id ${params.ruleId}"], 404)
     return respond([
@@ -422,8 +424,9 @@ Map apiGetRule() {
 }
 
 /** @return The devices Claude may use, with their attributes and commands. */
-Map apiListPool() {
-    if (refuseRemote()) return
+Object apiListPool() {
+    Object refused = remoteRefusal()
+    if (refused != null) return refused
     List devices = (settings.poolDevices ?: []).collect { dev ->
         [
             deviceId  : dev.id.toString(),
@@ -439,8 +442,9 @@ Map apiListPool() {
 }
 
 /** Create one rule from a submitted spec. */
-Map apiCreateRule() {
-    if (refuseRemote()) return
+Object apiCreateRule() {
+    Object refused = remoteRefusal()
+    if (refused != null) return refused
     if (getChildApps().size() >= MAX_RULES) {
         return respond([error: "This hub already holds ${MAX_RULES} rules, which is the cap."], 409)
     }
@@ -468,8 +472,9 @@ Map apiCreateRule() {
 }
 
 /** Replace one rule's spec. */
-Map apiUpdateRule() {
-    if (refuseRemote()) return
+Object apiUpdateRule() {
+    Object refused = remoteRefusal()
+    if (refused != null) return refused
     def child = findChild(params.ruleId)
     if (!child) return respond([error: "No rule with id ${params.ruleId}"], 404)
 
@@ -505,8 +510,9 @@ Map apiUpdateRule() {
 }
 
 /** Enable or disable one rule without deleting it. */
-Map apiSetEnabled() {
-    if (refuseRemote()) return
+Object apiSetEnabled() {
+    Object refused = remoteRefusal()
+    if (refused != null) return refused
     def child = findChild(params.ruleId)
     if (!child) return respond([error: "No rule with id ${params.ruleId}"], 404)
 
@@ -520,8 +526,9 @@ Map apiSetEnabled() {
 }
 
 /** Delete one rule and everything it scheduled. */
-Map apiDeleteRule() {
-    if (refuseRemote()) return
+Object apiDeleteRule() {
+    Object refused = remoteRefusal()
+    if (refused != null) return refused
     def child = findChild(params.ruleId)
     if (!child) return respond([error: "No rule with id ${params.ruleId}"], 404)
 
@@ -538,10 +545,12 @@ Map apiDeleteRule() {
 /**
  * Refuse a request that did not arrive over the local network.
  *
- * @return true when the request was refused and the caller must stop.
+ * @return The refusal response when the request must stop, or null to let it
+ *     proceed. A response rather than a boolean, because the caller has to
+ *     return it — Hubitat sends what the handler returns.
  */
-private boolean refuseRemote() {
-    if (settings.refuseCloudRequests == false) return false
+private Object remoteRefusal() {
+    if (settings.refuseCloudRequests == false) return null
 
     // SECURITY: Hubitat publishes both a local and a cloud URL for any OAuth
     // app, and the cloud one is reachable by anyone holding the token. This
@@ -567,16 +576,14 @@ private boolean refuseRemote() {
         // 409 rather than 403: http_client.py never reads a 401 or 403 body,
         // by design, so a 403 here reaches the operator as "the hub rejected
         // your token" and sends them to rotate a working credential.
-        respond([error: "Refused: this endpoint serves local-network callers only."], 409)
-        return true
+        return respond([error: "Refused: this endpoint serves local-network callers only."], 409)
     }
     String hostName = host.tokenize(":")[0]
     if (hostName != localIp && hostName != "localhost" && hostName != "127.0.0.1") {
         log.warn "Claude Automations: refused a request with Host '${hostName}'"
-        respond([error: "Refused: this endpoint serves local-network callers only."], 409)
-        return true
+        return respond([error: "Refused: this endpoint serves local-network callers only."], 409)
     }
-    return false
+    return null
 }
 
 /**
@@ -584,14 +591,19 @@ private boolean refuseRemote() {
  *
  * @param body The response body.
  * @param status HTTP status, 200 unless given.
- * @return null; the hub takes the response from render().
+ * @return The rendered response, which the caller must return in turn.
  */
-private Map respond(Map body, Integer status = 200) {
+private Object respond(Map body, Integer status = 200) {
     // NOTE: no response here ever carries the access token, a device's raw
     // state, or an exception message from the hub. Errors name the field that
     // failed and nothing else.
-    render(contentType: "application/json", data: JsonOutput.toJson(body), status: status)
-    return null
+    //
+    // NOTE: the result of render() is RETURNED, not discarded. Hubitat sends
+    // what the mapping handler returns; calling render() and then returning
+    // null produces HTTP 200 with a zero-length body — which is what every
+    // endpoint did until this was corrected. Every caller must likewise
+    // `return respond(...)` rather than calling it as a statement.
+    return render(contentType: "application/json", data: JsonOutput.toJson(body), status: status)
 }
 
 // --- Validation --------------------------------------------------------------

@@ -20,6 +20,8 @@ Deploy-scope audit of the automations branch against `main`. **No regressions.**
 | A6-INF-2 | Info | `toLowerCase()` uses the JVM default locale in the guarded-command check; under a Turkish locale `SIREN` lowercases outside the list | Fixed, pending re-audit. Both call sites use `Locale.ROOT`. |
 | A6-INF-3 | Info | A5-INF-3 was fixed in one of three places; `SPEC-automations-app.md` still says "six tools" twice | Fixed, pending re-audit. Also corrected two other spec statements the build had outrun. |
 
+**Found on first contact with real hardware, after audit 6:** every endpoint returned HTTP 200 with a zero-length body. `respond()` called `render()` and returned null, treating render as a side effect, but Hubitat sends what the mapping handler *returns*. The local-only check had the same shape, so a refused cloud request would have answered an empty 200 rather than a visible 409. Fixed in `e000560`. Neither audit could have caught it — both reviewed the Groovy by reading, and the defect exists only in how the platform treats a return value.
+
 Confirmed intact: the fail-closed capability parse, the writable-device allowlist on all three write paths, the charge-after-conditions ordering, both concurrency barriers, the device-pool fence, the fire-time boundary re-check, and command dispatch gated on `hasCommand`.
 
 ## Audit 5 — `d79c9fb` · 2026-08-05 · verdict BLOCK
