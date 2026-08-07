@@ -4,6 +4,8 @@ Connects a Hubitat Elevation hub to Claude, in both directions. An (MCP) Model C
 
 Everything stays on your local network. The server refuses any hub address that is not private, and never uses Hubitat's cloud relay. The optional automations app is the one qualifier: Hubitat publishes a cloud URL for it whether or not you use one, and the app refuses requests arriving that way — see that section below.
 
+This repo is the harness only: the integration and the Groovy code that runs on the hub. Agents and skills built on top of it live in [hubitat-agent](https://github.com/oakley7247/hubitat-agent), which reads this repo's `.env` and runs on its interpreter.
+
 ## Install
 
 ```bash
