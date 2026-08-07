@@ -4,7 +4,7 @@
  * every rule Claude submits, owns the device subscriptions, and dispatches
  * events to the child app that asked for them.
  *
- * Part of: hubitat-claude. Installed on the hub itself. Called by: the MCP
+ * Part of: hubitat-harness. Installed on the hub itself. Called by: the MCP
  * server on Sean's Mac, over this app's local OAuth endpoints. Calls: its own
  * child apps (one per rule), and the devices selected in its preferences.
  *
@@ -24,6 +24,10 @@ import groovy.transform.Field
 
 definition(
     name: "Claude Automations",
+    // NOTE: this namespace is the hub's identity for the app, and the child
+    // app matches its `parent:` against it. The repo renaming to hubitat-harness
+    // does not rename this — changing it would orphan every rule instance
+    // already installed on the hub.
     namespace: "hubitat-claude",
     author: "Sean Oakley",
     description: "Lets Claude create automation rules on this hub, bounded by a device pool you choose.",
@@ -131,6 +135,8 @@ preferences {
 ]
 
 @Field static final String CHILD_NAME = "Claude Automation Rule"
+// NOTE: matches the child app's own namespace, which stays hubitat-claude for
+// the reason given at the definition block above.
 @Field static final String CHILD_NAMESPACE = "hubitat-claude"
 
 // --- Pages -------------------------------------------------------------------

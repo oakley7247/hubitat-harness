@@ -1,4 +1,4 @@
-# SPEC — hubitat-claude
+# SPEC — hubitat-harness
 
 Covers the two shipped components: the MCP server and the Claude Assistant driver. A
 third — a Hubitat app that lets Claude write automation rules onto the hub — is specified

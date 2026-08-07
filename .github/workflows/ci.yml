@@ -1,5 +1,5 @@
 # =============================================================================
-# ci.yml — tests, lint, types, and security scans for hubitat-claude, on every
+# ci.yml — tests, lint, types, and security scans for hubitat-harness, on every
 # push to main and every pull request.
 #
 # Rules this pipeline encodes (see standards/continuous-integration.md):

@@ -2,7 +2,7 @@
 # test_config.py — proves the configuration loader accepts a usable hub and
 # refuses every unusable one, without ever echoing the token.
 #
-# Part of: hubitat-claude test suite. Tests: src/hubitat_claude/config.py.
+# Part of: hubitat-harness test suite. Tests: src/hubitat_harness/config.py.
 # Each test names one property and is shaped so nothing else can satisfy it.
 # =============================================================================
 """Tests for loading and validating the hub connection settings."""
@@ -10,7 +10,7 @@
 import unittest
 from unittest import mock
 
-from hubitat_claude.config import ConfigError, load_config
+from hubitat_harness.config import ConfigError, load_config
 
 _VALID_ENV = {
     "HUBITAT_HOST": "192.168.1.50",

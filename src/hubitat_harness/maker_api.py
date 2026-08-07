@@ -1,7 +1,7 @@
 # =============================================================================
 # maker_api.py — HTTP client for one Hubitat hub's local Maker API.
 #
-# Part of: hubitat-claude MCP server. Called by: server.py. Calls: the hub over
+# Part of: hubitat-harness MCP server. Called by: server.py. Calls: the hub over
 # plain HTTP on the local network (the Maker API serves HTTP and authenticates
 # by query-string token; it offers no header auth and no trusted certificate),
 # through http_client.py.

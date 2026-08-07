@@ -1,4 +1,4 @@
-# Security audit ledger — hubitat-claude
+# Security audit ledger — hubitat-harness
 
 What each independent audit found, and what was done about it. The auditor reads this to tell a new finding from a returning one; without it, every round starts from zero.
 

@@ -2,7 +2,7 @@
 # test_rule_store.py — proves the local rule mirror writes only where it is
 # supposed to, and only what can be restored.
 #
-# Part of: hubitat-claude test suite. Tests: src/hubitat_claude/rule_store.py.
+# Part of: hubitat-harness test suite. Tests: src/hubitat_harness/rule_store.py.
 # The tests run against a real temporary directory rather than a mocked
 # filesystem, because the properties that matter here — where a path resolves
 # to, what a symlink does, which files a sweep deletes — are properties of the
@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hubitat_claude.rule_store import RuleStore, RuleStoreError, slugify
+from hubitat_harness.rule_store import RuleStore, RuleStoreError, slugify
 
 _SPEC = {
     "name": "Hallway ceiling on when front door opens",

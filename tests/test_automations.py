@@ -2,7 +2,7 @@
 # test_automations.py — proves the rules client's safety properties against a
 # real loopback HTTP server, not a mocked-out socket.
 #
-# Part of: hubitat-claude test suite. Tests: src/hubitat_claude/automations.py
+# Part of: hubitat-harness test suite. Tests: src/hubitat_harness/automations.py
 # and the writable-device gate the rule tools add in server.py. The tests drive
 # the client through its public methods so URL building, body encoding, the
 # refusal path, and the token-withholding all run together.
@@ -17,14 +17,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from unittest import mock
 
-from hubitat_claude import server
-from hubitat_claude.automations import (
+from hubitat_harness import server
+from hubitat_harness.automations import (
     AutomationsClient,
     AutomationsError,
     AutomationsNotConfiguredError,
     collect_device_ids,
 )
-from hubitat_claude.config import HubitatConfig
+from hubitat_harness.config import HubitatConfig
 
 _TOKEN = "b7c1e2f3-4a5b-6c7d-8e9f-0a1b2c3d4e5f"
 

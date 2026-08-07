@@ -1,7 +1,7 @@
 # =============================================================================
 # http_client.py — the HTTP transport both hub clients share.
 #
-# Part of: hubitat-claude MCP server. Called by: maker_api.py and
+# Part of: hubitat-harness MCP server. Called by: maker_api.py and
 # automations.py. Calls: one private IP on the local network.
 # Security: this module holds the properties that must not drift between the
 # two callers — proxies are suppressed, redirects are refused, response bodies

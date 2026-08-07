@@ -1,4 +1,4 @@
-# hubitat-claude
+# hubitat-harness
 
 Connects a Hubitat Elevation hub to Claude, in both directions. An (MCP) Model Context Protocol server lets you ask Claude to check sensors and control devices; a Groovy driver lets hub automations ask Claude a question and act on the answer.
 
@@ -7,8 +7,8 @@ Everything stays on your local network. The server refuses any hub address that 
 ## Install
 
 ```bash
-git clone https://github.com/oakley7247/hubitat-claude.git
-cd hubitat-claude
+git clone https://github.com/oakley7247/hubitat-harness.git
+cd hubitat-harness
 uv venv --python 3.14 .venv
 uv pip install --require-hashes -r requirements.lock
 uv pip install -e . --no-deps
@@ -27,13 +27,13 @@ uv pip install -e . --no-deps
 Register the server with Claude Code:
 
 ```bash
-claude mcp add hubitat --env-file .env -- /full/path/to/hubitat-claude/.venv/bin/hubitat-claude
+claude mcp add hubitat --env-file .env -- /full/path/to/hubitat-harness/.venv/bin/hubitat-harness
 ```
 
 To check the wiring before registering it, run it directly — it exits immediately with the name of the first missing or invalid setting, and otherwise waits for MCP traffic on stdin:
 
 ```bash
-set -a && source .env && set +a && .venv/bin/hubitat-claude
+set -a && source .env && set +a && .venv/bin/hubitat-harness
 ```
 
 ## Example

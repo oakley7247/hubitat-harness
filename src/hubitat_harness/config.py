@@ -1,7 +1,7 @@
 # =============================================================================
 # config.py — reads and validates the Hubitat hub connection settings.
 #
-# Part of: hubitat-claude MCP server. Called by: server.py at startup.
+# Part of: hubitat-harness MCP server. Called by: server.py at startup.
 # Security: the Maker API token is a full-control credential for the home. It
 # is read from the environment only (never from code or argv, where it would
 # land in shell history and `ps` output), and never appears in any error this

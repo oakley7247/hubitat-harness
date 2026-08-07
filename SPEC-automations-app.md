@@ -57,7 +57,7 @@ or not Claude or the Mac is ever available again.
 |---|---|---|
 | `apps/claude-automations.groovy` | Hub | Device pool, endpoints, validation, child lifecycle, kill switch |
 | `apps/claude-automation-rule.groovy` | Hub | One rule spec, its subscriptions, its execution engine |
-| `src/hubitat_claude/automations.py` | Mac | HTTP client for the parent app's endpoints |
+| `src/hubitat_harness/automations.py` | Mac | HTTP client for the parent app's endpoints |
 | Seven new tools in `server.py` | Mac | The MCP surface Claude calls |
 
 ## Rule schema

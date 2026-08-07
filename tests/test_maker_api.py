@@ -2,7 +2,7 @@
 # test_maker_api.py — proves the Maker API client's safety properties against a
 # real loopback HTTP server, not a mocked-out socket.
 #
-# Part of: hubitat-claude test suite. Tests: src/hubitat_claude/maker_api.py.
+# Part of: hubitat-harness test suite. Tests: src/hubitat_harness/maker_api.py.
 # The tests drive the client through its public methods so they exercise URL
 # building, the redirect refusal, the size cap, and JSON parsing together —
 # calling the private request helper directly would skip exactly the layers
@@ -17,8 +17,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
-from hubitat_claude.config import HubitatConfig
-from hubitat_claude.maker_api import (
+from hubitat_harness.config import HubitatConfig
+from hubitat_harness.maker_api import (
     MakerApiClient,
     MakerApiError,
     MakerApiUnavailableError,
