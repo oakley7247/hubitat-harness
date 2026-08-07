@@ -209,6 +209,16 @@ Second worst: the OAuth token leaks and a stranger writes rules over the device 
    It is not in the actions table. Adding it later changes nothing already built.
 4. **Are the default caps right?** 50 rules, 20 actions.
 
+## Known issues
+
+**No cross-rule delay cancellation.** `cancelPending` cancels only the rule's own pending delay, so one rule cannot cancel another's timer. A motion-off rule therefore cannot have its countdown restarted by the matching motion-on rule: leave a room at 8:00, return at 8:04:30, still there at 8:05:00, and the light goes off while you stand in it. The same flaw appears mirrored in a single rule whose clock runs from motion going active.
+
+The agreed fix is a `cancelRule` action naming another rule id. It needs a schema addition, Groovy work on both apps, and a security-audit pass — one child acting on another is a new trust edge inside the app, and the parent would have to mediate it. Not yet built.
+
+**Half the engine has never run on hardware.** Attribute triggers, subscription dispatch, device commands, and fire counting are verified. Conditions, delays and resume, time/cron/sun triggers, mode and button triggers, `notify`, the firing-rate trip, and the fire-time boundary refusal are not. Every defect found so far lived in that gap.
+
+**`setColor` is unreachable.** It takes a `COLOR_MAP`, which neither write path can express — `send_command` sends one comma-free argument, and a rule's `args` passes scalars. Use `setHue`, `setSaturation`, and `setLevel` as separate actions.
+
 ## Changed during the build
 
 **The cascade-depth cap became a firing-rate trip.** Attributing a firing to the rule
