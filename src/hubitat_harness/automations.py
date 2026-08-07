@@ -1,7 +1,7 @@
 # =============================================================================
 # automations.py — HTTP client for the Claude Automations app on the hub.
 #
-# Part of: hubitat-claude MCP server. Called by: server.py. Calls: the parent
+# Part of: hubitat-harness MCP server. Called by: server.py. Calls: the parent
 # app's local OAuth endpoints, through http_client.py.
 # Security: this client writes rules, which are standing unattended commands —
 # so it is deliberately thin. It validates the shape and size of what it sends

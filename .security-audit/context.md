@@ -1,4 +1,4 @@
-# Security context — hubitat-claude
+# Security context — hubitat-harness
 
 ## What this is
 
@@ -41,7 +41,7 @@ No database, no cache, no log files of its own.
 
 **The MCP server does not authenticate its caller** and has no way to: it is a stdio subprocess, so its caller is whoever started it, which the operating system already decides. This is the standard MCP local-server model.
 
-**Authorization is enforced in two places in `src/hubitat_claude/server.py`:**
+**Authorization is enforced in two places in `src/hubitat_harness/server.py`:**
 
 1. `send_command` fetches the device from the hub and refuses any command not in that device's own reported command list. The allowlist comes from the hub on each call, not from a list carried in this code and not from the model.
 2. Devices carrying `Lock`, `DoorControl`, `GarageDoorControl`, `Valve`, `SecurityKeypad`, or `Alarm` are refused unless `HUBITAT_ALLOW_SECURITY_COMMANDS` is explicitly true, and so are all hub mode changes. Default is false. The check fails closed on what parsing produced, not on the raw shape: a capability list that is missing, not a list, empty, or made only of entries that yield no capability name is refused rather than read as "this device guards nothing".
@@ -62,7 +62,7 @@ No database, no cache, no log files of its own.
 
 **Untrusted text rendered on a Hubitat page is an HTML sink.** `paragraph` renders markup by design, and Hub Login Security is off by default, so the hub's admin origin runs unauthenticated. Both apps escape every model-supplied and device-supplied value at the point of rendering; anything added to those pages later must do the same.
 
-**Authentication to the hub** is the Maker API token, in the query string, because the Maker API offers no header-auth option. `src/hubitat_claude/maker_api.py` refuses all redirects so that credential cannot be forwarded off-host.
+**Authentication to the hub** is the Maker API token, in the query string, because the Maker API offers no header-auth option. `src/hubitat_harness/maker_api.py` refuses all redirects so that credential cannot be forwarded off-host.
 
 ## Controls in front of the code
 

@@ -3,7 +3,7 @@
 # device itself reports, and a device guarding a physical boundary is off
 # limits unless the hub owner opted in.
 #
-# Part of: hubitat-claude test suite. Tests: src/hubitat_claude/server.py.
+# Part of: hubitat-harness test suite. Tests: src/hubitat_harness/server.py.
 # =============================================================================
 """Tests for the MCP tool layer's command allowlist and guarded-device gate."""
 
@@ -11,9 +11,9 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from hubitat_claude import server
-from hubitat_claude.config import HubitatConfig
-from hubitat_claude.maker_api import MakerApiError
+from hubitat_harness import server
+from hubitat_harness.config import HubitatConfig
+from hubitat_harness.maker_api import MakerApiError
 
 _SWITCH = {
     "id": "154",

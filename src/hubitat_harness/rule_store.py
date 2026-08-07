@@ -1,7 +1,7 @@
 # =============================================================================
 # rule_store.py — keeps local JSON copies of the rules running on the hub.
 #
-# Part of: hubitat-claude MCP server. Called by: server.py after any successful
+# Part of: hubitat-harness MCP server. Called by: server.py after any successful
 # rule change, and by the sync_rules tool. Calls: the local filesystem only.
 # Security: this is the one component that writes to disk, and the filename it
 # writes is derived from a rule name the model chose — so the name is

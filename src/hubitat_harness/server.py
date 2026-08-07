@@ -1,7 +1,7 @@
 # =============================================================================
 # server.py — the MCP server: exposes the Hubitat hub to Claude as tools.
 #
-# Part of: hubitat-claude. Calls: maker_api.py. Speaks MCP over stdio to
+# Part of: hubitat-harness. Calls: maker_api.py. Speaks MCP over stdio to
 # whichever client launched it (Claude Code, Claude Desktop).
 # Security: everything the hub returns is attacker-influenceable text — device
 # labels and attribute values are set by whoever installed the device — so it
@@ -825,7 +825,7 @@ def main() -> None:
         _config = load_config()
     except ConfigError as error:
         # Fail at startup with the reason, rather than at the first tool call.
-        print(f"hubitat-claude: {error}", file=sys.stderr)
+        print(f"hubitat-harness: {error}", file=sys.stderr)
         raise SystemExit(1) from error
     _client = MakerApiClient(_config)
     mcp.run("stdio")

@@ -3,7 +3,7 @@
  * claude-assistant.groovy — a virtual Hubitat device that asks Claude a
  * question and publishes the answer as a device attribute.
  *
- * Part of: hubitat-claude. Installed on the hub itself. Called by: Rule
+ * Part of: hubitat-harness. Installed on the hub itself. Called by: Rule
  * Machine, dashboards, or the device page, via the askClaude command. Calls:
  * the Anthropic Messages API over HTTPS.
  *
@@ -18,6 +18,9 @@
 metadata {
     definition(
         name: "Claude Assistant",
+        // NOTE: this namespace is the hub's identity for the driver. The repo
+        // renaming to hubitat-harness does not rename it — changing it would
+        // detach the driver from devices already using it.
         namespace: "hubitat-claude",
         author: "Sean Oakley",
         importUrl: ""

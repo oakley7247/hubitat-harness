@@ -3,7 +3,7 @@
  * claude-automation-rule.groovy — child app. Holds one rule: its trigger, its
  * conditions, and its actions, plus the schedules that fire it.
  *
- * Part of: hubitat-claude. Installed on the hub itself, always as a child of
+ * Part of: hubitat-harness. Installed on the hub itself, always as a child of
  * Claude Automations. Called by: the parent, which routes device events here
  * and supplies every device this app touches. Calls: devices, through the
  * parent's pool.
@@ -23,6 +23,10 @@ import groovy.transform.Field
 
 definition(
     name: "Claude Automation Rule",
+    // NOTE: this namespace is the hub's identity for the app, and the child
+    // app matches its `parent:` against it. The repo renaming to hubitat-harness
+    // does not rename this — changing it would orphan every rule instance
+    // already installed on the hub.
     namespace: "hubitat-claude",
     author: "Sean Oakley",
     description: "One automation rule, created and maintained by Claude.",
