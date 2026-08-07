@@ -12,6 +12,21 @@ They also describe the layout of a home — which sensor guards which door, whic
 
 Each file holds one rule's spec exactly as `create_rule` accepts it. Nothing else: no rule id, no fire count, no timestamps. That is deliberate — the hub's validator refuses keys the schema does not define, so a file with extra metadata could not be resubmitted. The rule id lives in the filename instead.
 
+## Naming
+
+Rules are named **Room - Trigger Device - Action Device**:
+
+```
+Bathroom - Motion Sensor - Countertop Light
+Hallway - Front Door Sensor - Front Ceiling - Open
+```
+
+Device names are shortened to the part that identifies them, dropping the room prefix the label already carries — `Bathroom - Countertop Light` becomes `Countertop Light`, since the room is the first segment.
+
+**A fourth segment is added only to break a tie.** Two rules on the same trigger and action device, differing only by trigger value, would otherwise get identical names and be indistinguishable in the hub's Apps list. The pair on the front door is the case: one fires on `open`, one on `closed`, so each carries its trigger value at the end.
+
+Names may not contain `<`, `>`, `&`, `"`, `'`, or a backtick, and cap at 80 characters. The filename slug is derived from the name automatically, so renaming a rule renames its file and removes the old one.
+
 ## Restoring one
 
 Ask Claude to create a rule from the file's contents, or post it directly:
