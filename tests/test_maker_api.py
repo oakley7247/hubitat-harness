@@ -96,6 +96,15 @@ class RequestTests(unittest.TestCase):
         self.assertIn("/apps/api/42/devices", path)
         self.assertIn(f"access_token={_TOKEN}", path)
 
+    def test_all_devices_is_one_request_to_the_all_endpoint(self):
+        """The whole-home read hits /devices/all once and returns the list intact."""
+        devices = [{"id": "154", "label": "Porch Light", "attributes": {"switch": "on"}}]
+        server, port = _start_server(self, body=json.dumps(devices).encode())
+        result = MakerApiClient(_config(port)).get_all_devices()
+        self.assertEqual(result, devices)
+        self.assertEqual(len(server.received), 1)  # type: ignore[attr-defined]
+        self.assertIn("/apps/api/42/devices/all", server.received[0])  # type: ignore[attr-defined]
+
     def test_error_envelope_on_http_200_is_still_an_error(self):
         """A truthy error key is caught even though the status says success."""
         body = json.dumps({"error": True, "message": "no such device"}).encode()

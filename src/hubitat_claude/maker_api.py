@@ -186,6 +186,23 @@ class MakerApiClient:
         """
         return self._request("devices")
 
+    def get_all_devices(self) -> Any:
+        """Return every device with its attributes, in one request.
+
+        The per-device endpoint would need one call per device to gather the
+        same picture; this endpoint answers a whole-home read in a single
+        round trip. Its attributes arrive as a flat name-to-value map of
+        strings, not the list of typed records `get_device` returns.
+
+        Returns:
+            A list of dicts carrying `id`, `name`, `label`, `type`, `room`,
+            `capabilities`, `attributes`, and `commands`.
+
+        Raises:
+            MakerApiError: The hub refused the call.
+        """
+        return self._request("devices", "all")
+
     def get_device(self, device_id: str) -> Any:
         """Return one device's full detail, including attributes and commands.
 
