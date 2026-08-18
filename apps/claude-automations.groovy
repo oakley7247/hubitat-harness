@@ -256,8 +256,7 @@ void appButtonHandler(String buttonName) {
             log.warn "Claude Automations: firing-rate trip cleared by hand"
             break
         case "rotateToken":
-            // SECURITY: rotation is the answer to a leaked token, and to the
-            // cloud endpoint if it turns out it cannot be refused. Hubitat
+            // SECURITY: rotation is the answer to a leaked token. Hubitat
             // mints a new token and invalidates the old one in one step.
             state.accessToken = null
             createAccessToken()
@@ -563,11 +562,12 @@ private Object remoteRefusal() {
     // project is local-only by design, so the cloud path is refused by
     // comparing the Host header against the hub's own address.
     //
-    // NOTE: this defence is unverified against a real hub. If the relay
-    // rewrites Host to the hub's address, this check passes cloud traffic
-    // silently — which is why the observed value is logged at debug, so it can
-    // be confirmed, and why the token can be rotated from the app page. Until
-    // it is confirmed, treat the cloud URL as live and keep the token secret.
+    // NOTE: verified against a real hub on 2026-08-07 (C-8, firmware 2.4.3.176).
+    // A GET to /rules and /pool through cloud.hubitat.com was refused with 409
+    // while the same calls succeeded on the LAN, so the relay does not rewrite
+    // Host to the hub's address and this comparison does what it claims. Keep
+    // the token secret regardless: this check is the only thing standing
+    // between it and an internet-reachable rule editor.
     String host = null
     request?.headers?.each { key, value ->
         if (key?.toString()?.toLowerCase() == "host") {
