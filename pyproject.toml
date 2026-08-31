@@ -19,7 +19,7 @@ dependencies = [
     # stdio framing, JSON-RPC envelope, and capability negotiation by hand
     # would be far more code than the server itself; nothing in the standard
     # library speaks MCP.
-    "mcp==2.0.0",
+    "mcp==2.1.1",
 ]
 
 [project.scripts]
